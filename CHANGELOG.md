@@ -1,3 +1,37 @@
+# 0.6.5 AL r4 — 2026-10-06
+
+## 保存参数成为默认值
+
+- 使用 `SVSPregnancy_belly.json` 在 2026-10-06 06:10:36（UTC+08:00）保存的完整 73 项参数作为默认预设。
+- 07:22 的插件备份含 r3 DLL、r3 启动日志及相同配置；未找到更晚的导出。该预设最初保存于 r3 发布前，并非新生成的 r3 导出。
+- 实际变动为下列 10 个绑骨过渡参数。F8 的 **Default shape**、**Full-term shape** 及无配置时的初始化均使用新默认值。
+- 已有配置中的明确值继续优先；缺少的字段采用当前默认值。重置后按 **Save to File** 可保存。
+- 变形算法、r3 上缘平滑、每帧更新和其它插件功能保持 r3 实现。
+
+| 参数 | r3 默认 | r4 默认 |
+| --- | ---: | ---: |
+| `axisBlendStart` | 0.02 | 0.103984065 |
+| `axisBlendFull` | 0.25 | 0.13217132 |
+| `lowerTransitionStart` | 0.02 | -0.03934264 |
+| `lowerTransitionWidth` | 0.6 | 0.7216733 |
+| `lowerTransitionBias` | 0 | 1.3625498 |
+| `upperTransitionStart` | 0.10542166 | 0.22609562 |
+| `upperTransitionWidth` | 0.5965462 | 0.40326697 |
+| `upperTransitionBias` | 0 | -0.3187251 |
+| `upperTransitionJoin` | 0.2 | 0.10394423 |
+| `upperTransitionActivation` | 0.02 | 0.025932271 |
+
+## 验证
+
+- Release/net6.0 编译成功：0 错误，405 警告（当前本机 HF Patch 更新后的引用环境）。
+- 277 项几何/参数/真实模型检查、40 项运行生命周期模拟通过。
+- 新默认值逐项匹配完整 73 项保存参数；原 AL 参数仍作为独立姿势回归基线。
+- 离线姿势回放结果保持 r3 水平；极端姿势仍可能翻折。未验证游戏内最终画面与帧率，继续标记为预发布版本。
+
+Build marker: `20261006-AL-0.2.26-SVS-saved-defaults-r4`.
+
+---
+
 # 0.6.5 AL r3 — 2026-10-06
 
 ## 变更

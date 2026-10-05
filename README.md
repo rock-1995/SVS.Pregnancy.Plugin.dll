@@ -7,9 +7,9 @@ The project focuses on keeping the feature set self-contained for SVS: it
 does not require external character-body plugins, and it includes its own
 runtime belly morphing and clothing deformation support.
 
-## Current build: 0.6.5 AL r3
+## Current build: 0.6.5 AL r4
 
-[Download the DLL and source package](https://github.com/rock-1995/SVS.Pregnancy.Plugin.dll/releases/tag/0.6.5-al-r3).
+[Download the DLL and source package](https://github.com/rock-1995/SVS.Pregnancy.Plugin.dll/releases/tag/0.6.5-al-r4).
 
 This build ports the AL Pregnancy 0.2.26 belly geometry, vertex binding and
 deformation controls to SVS. It includes SVS rig calibration fixes and smooths
@@ -18,7 +18,10 @@ Pregnancy gameplay and save handling retain the SVS implementation.
 
 The F8 deformation panel includes the AL shape controls, growth-stage preview,
 upper/lower attachment controls, navel controls, clothing displacement and
-rebuild/reset buttons. Existing configuration files can be retained.
+rebuild/reset buttons. r4 uses the saved SVS deformation preset from
+2026-10-06 06:10:36 (UTC+08:00) as its defaults. F8 **Default shape** and
+**Full-term shape** load that preset. Existing configuration files keep their
+saved values; use **Save to File** after resetting to persist the defaults.
 
 This is a **pre-release**: offline checks pass, but live rendering and frame
 rate have not been verified. Extreme bends can still fold. See
