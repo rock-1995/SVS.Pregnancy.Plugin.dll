@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup><OutputType>Exe</OutputType><TargetFramework>net10.0</TargetFramework><ImplicitUsings>enable</ImplicitUsings><NuGetAudit>false</NuGetAudit></PropertyGroup>
+  <ItemGroup>
+    <Compile Include="../src/BellyShape.cs" Link="BellyShape.cs" />
+    <Compile Include="../src/BreastExclusion.cs" Link="BreastExclusion.cs" />
+    <Compile Include="../src/MaterialBlendField.cs" Link="MaterialBlendField.cs" />
+    <Compile Include="../src/RestPoseFit.cs" Link="RestPoseFit.cs" />
+    <Compile Include="../src/RestSpaceMapping.cs" Link="RestSpaceMapping.cs" />
+    <Compile Include="../src/RigBoneNames.cs" Link="RigBoneNames.cs" />
+    <Compile Include="../src/SkinBounds.cs" Link="SkinBounds.cs" />
+    <Compile Include="../src/SkinAttachmentField.cs" Link="SkinAttachmentField.cs" />
+    <Compile Include="../src/SkinSurfaceShading.cs" Link="SkinSurfaceShading.cs" />
+    <Compile Include="../src/SurfaceAttachment.cs" Link="SurfaceAttachment.cs" />
+    <Compile Include="../src/TorsoProfile.cs" Link="TorsoProfile.cs" />
+    <Compile Include="../src/TorsoLandmarks.cs" Link="TorsoLandmarks.cs" />
+    <Compile Include="../src/TorsoSelectionPolicy.cs" Link="TorsoSelectionPolicy.cs" />
+    <Compile Include="../src/VirtualAxisMath.cs" Link="VirtualAxisMath.cs" />
+    <Compile Include="../src/VirtualWeights.cs" Link="VirtualWeights.cs" />
+    <Compile Include="../src/VtxSettings.cs" Link="VtxSettings.cs" />
+    <None Update="release-defaults.json" CopyToOutputDirectory="PreserveNewest" />
+    <None Update="crack-repro-settings.json" CopyToOutputDirectory="PreserveNewest" />
+    <None Update="user-trace-0.1.3-bones.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+</Project>
