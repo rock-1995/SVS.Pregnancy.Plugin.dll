@@ -65,7 +65,9 @@ internal static class SkinAttachmentRegression
         float[] blend=local.Select(v=>BellyShape.Smooth((v.Y-torso.Navel)/(torso.Span*.10f))).ToArray();
         using var config=JsonDocument.Parse(File.ReadAllText(Path.Combine(AppContext.BaseDirectory,"crack-repro-settings.json")));
         var captured=JsonSerializer.Deserialize<VtxSettings>(config.RootElement.GetProperty("vtx").GetRawText());
-        var cases=new[]{("user",captured), ("AL-default",new VtxSettings())};
+        // Preserve the original AL baseline when the release preset changes.
+        var alDefault=new VtxSettings {AxisBlendStart=0.02f, AxisBlendFull=0.25f, LowerTransitionStart=0.02f, LowerTransitionWidth=0.6f, LowerTransitionBias=0f, UpperTransitionStart=0.10542166f, UpperTransitionWidth=0.5965462f, UpperTransitionBias=0f, UpperTransitionJoin=0.2f, UpperTransitionActivation=0.02f};
+        var cases=new[]{("user",captured), ("AL-default",alDefault)};
         var stats=new List<string>{"settings,stage,pose,joints,r2_flipped,r3_flipped,native_flipped"};
         int moderateOld=0,moderateNew=0,stressOld=0,stressNew=0;
         foreach(var (label,p) in cases)
