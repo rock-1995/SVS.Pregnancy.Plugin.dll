@@ -1,4 +1,4 @@
-﻿using BepInEx;
+using BepInEx;
 using BepInEx.Configuration;
 using BepInEx.Unity.IL2CPP;
 using HarmonyLib;
@@ -60,7 +60,7 @@ namespace SVSPregnancy
 
         public const string Transplanter = "Zentaiman";
         public const string PluginVersion = "0.2.7";
-        public const string BuildMarker = "20260523-accessory-same-anchor-rigid1";
+        public const string BuildMarker = "20261006-AL-0.2.26-SVS-upper-attachment-r3";
         public static PregnancyWorldController _worldController;
 
         public static PregnancyAssetController _assetController;                    
@@ -377,6 +377,7 @@ namespace SVSPregnancy
             BellyDeformSettings.Load();
 
             _hi.PatchAll(typeof(Hooks));
+            SVSDeformationRuntime.Install(_hi);
 
             // Mesh-load spy: hook SkinnedMeshRenderer.set_sharedMesh globally
             TryPatchMeshSpy();

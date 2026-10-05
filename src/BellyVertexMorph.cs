@@ -7,17 +7,10 @@ using Character;
 namespace SVSPregnancy
 {
     /// <summary>
-    /// Vertex-level belly deformation for SVS IL2CPP.
-    ///
-    /// Mechanisms (mirrored from PregnancyPlus source code analysis):
-    ///   1. Bind-pose local space computation  — pose-independent
-    ///   2. Bone-weight vertex filtering        — excludes legs, chest, arms
-    ///   3. LowerBodyRestoreMask                — leg-dominated vertices skipped
-    ///   4. RoundToSides Z-distance falloff     — PP's AnimationCurve (SmoothStep approx)
-    ///   5. ReduceRibStretchingZ                — limits chest push-forward
-    ///   6. RecalculateNormals + Tangents       — correct lighting after deformation
+    /// AL 0.2.26 rest-space shape, clothing attachment and virtual skinning,
+    /// hosted by SVSDeformationRuntime at the native Human.LateUpdate boundary.
     /// </summary>
-    internal static class BellyVertexMorph
+    internal static partial class BellyVertexMorph
     {
         // ── SVS/KK-family bone names ──────────────────────────────────────
         private static readonly string[] PelvisBones =
@@ -48,6 +41,8 @@ namespace SVSPregnancy
             public HashSet<int> LegBoneIdxSet;    // thigh/leg bones
             public bool BonesFound;
             public LocalFrame Frame;
+            public TorsoProfile Profile;
+            public VirtualRig Virtual;
             public bool       FrameValid;
             public float      LastAppliedRate  = float.NaN;
             public float      LastLoggedRate   = float.NaN;   // rate at last LogInfo — avoids log spam from UI InvalidateAll
@@ -61,7 +56,6 @@ namespace SVSPregnancy
             public int        LastMeshSpySig = 0;
             public int        LastMeshSpySmrCount = -1;
             public int        LastMeshSpyMfCount = -1;
-            public int        ForceReapplyFrames = 0;
         }
 
         private class ClothEntry
@@ -83,6 +77,8 @@ namespace SVSPregnancy
             // Cached per-overlay-vert mapping: overlayVert[i] → nearest body vert index.
             // Built once on first use; null until then.
             public int[] NearestBodyVertIdx;
+            public Matrix4x4 ToBody;
+            public Matrix4x4 FromBody;
         }
 
         private enum ClothKind
@@ -98,17 +94,24 @@ namespace SVSPregnancy
         // ── Mesh deformation record ───────────────────────────────────────
         private class MeshRecord
         {
+            public SkinnedMeshRenderer Renderer;
+            public bool IsCloth;
+            public int ActualMoved;
+            public float MaxDisplacement;
             public Mesh      Mesh;
+            public VirtualBinding Virtual;
             public Vector3[] OrigVerts;        // bind-pose baseline
             public Vector3[] LastNewV;
+            public float[] BellyInfluence;
             public bool[]    BellyMask;        // per-vertex bone-weight pass/fail (null = no filter)
             public float[]   BreastWeights;    // per-vertex breast-bone weight sum 0..1 (null = not computed / no breast bones found)
-            public float[]   SoftBreastGuard; // per-vertex effective guard including 1-ring spillover to non-breast verts (null = not computed)
+            public bool[]    BreastExcluded;   // hard exclusion from all plugin deformation stages
             public float[]   NippleGuard;     // narrow per-vertex zone around nipple/areola only — built from mnpa/mnpb overlay verts (null until first ApplyBodyLayerSMRs)
             public List<int>[] Neighbors;       // mesh topology cache for body-anchor basis building
             public int[]     NormalWeldGroup;   // position-welded vertex grouping for seam-aware normal recalculation
             public Vector3[] OrigNormals;       // normals at first record creation (before any deformation)
             public Vector4[] OrigTangents;      // tangents at first record creation (before any deformation)
+            public System.Numerics.Matrix4x4 ToReference = System.Numerics.Matrix4x4.Identity;
             public int       AppliedSig;
             public int       LastDeformedCount = -1;  // vertex count from last ApplySMR — used to suppress repeated log lines
         }
@@ -137,6 +140,7 @@ namespace SVSPregnancy
             public Vector3[] Morphed;
             public bool[] Valid;
             public bool[] Affected;
+            public bool[] BreastExcluded;
             public BodyAnchorBasis[] Bases;
             public List<int>[] SurfaceTrianglesByVertex;
         }
@@ -181,6 +185,7 @@ namespace SVSPregnancy
 
         private struct LocalFrame
         {
+            public TorsoProfile Profile;
             public Vector3 Center, Up, Fwd, Right;
             public float   BoneLen;
             public bool    BindPoseBased;
@@ -215,10 +220,11 @@ namespace SVSPregnancy
         /// </summary>
         public static bool  ForceApplyEnabled = false;
         public static float ForceApplyRate    = 1.0f;
+        public static int ForceApplyCharaId = -1;
 
         // ── Public API ────────────────────────────────────────────────────
 
-        public static void Apply(Human human, int charaId, float rate)
+        internal static void ApplyCore(Human human, int charaId, float rate)
         {
             if (human == null) return;
             rate = Mathf.Clamp01(rate);
@@ -236,11 +242,6 @@ namespace SVSPregnancy
 
             // ── Validate / refresh SMR ────────────────────────────────────
             bool needRescan = st.SMR == null || st.SMR.sharedMesh == null || st.HumanPtr != humanPtr;
-            if (!needRescan)
-            {
-                try { if (!st.SMR.gameObject.activeInHierarchy && human.hiPoly) needRescan = true; }
-                catch { }
-            }
             if (needRescan)
             {
                 // Invalidate records so BellyMask is recomputed for new SMR
@@ -250,6 +251,7 @@ namespace SVSPregnancy
                 st.SMR             = FindBodySMR(human);
                 st.BonesFound      = false;
                 st.FrameValid      = false;
+                st.Profile         = null;
                 st.LastAppliedRate = float.NaN;
                 st.HumanPtr        = humanPtr;
                 st.CharaId         = charaId;
@@ -260,24 +262,14 @@ namespace SVSPregnancy
                 st.LastSkippedInactive = false;
                 if (st.SMR == null)
                 {
-                    Log.LogWarning($"[VtxMorph] id={charaId}: body SMR not found");
-                    return;
+                    throw new InvalidOperationException($"Body SMR not found for character {charaId}.");
                 }
                 RuntimeLogInfo($"[VtxMorph] id={charaId}: SMR \"{st.SMR.sharedMesh.name}\" " +
                                $"{st.SMR.sharedMesh.vertexCount}v readable={st.SMR.sharedMesh.isReadable}");
-                st.ForceReapplyFrames = 4;
             }
 
-            bool inactiveBody = false;
-            try { inactiveBody = st.SMR != null && !st.SMR.gameObject.activeInHierarchy; } catch { }
-            if (inactiveBody)
-            {
-                if (!st.LastSkippedInactive)
-                    RuntimeLogInfo($"[VtxMorph] id={charaId}: body \"{st.SMR?.sharedMesh?.name ?? "null"}\" inactive — skipping (will suppress repeats)");
-                st.LastSkippedInactive = true;
-                st.LastAppliedRate = rate;
-                return;
-            }
+            // AL hides individual skin pieces under clothing. A hidden torso still
+            // supplies the rest-pose frame used to deform the visible clothes.
             if (st.LastSkippedInactive)
             {
                 RuntimeLogInfo($"[VtxMorph] id={charaId}: body \"{st.SMR?.sharedMesh?.name ?? "null"}\" became active — resuming deformation");
@@ -298,27 +290,31 @@ namespace SVSPregnancy
                 st.LastBodyLayerApplied = -1;
             }
 
-            // ── Force reapply on SMR change (gives animation time to settle) ─
-            if (st.ForceReapplyFrames > 0)
-            {
-                st.ForceReapplyFrames--;
-                st.LastAppliedRate = float.NaN;
-            }
+            // Called at the completed native Human.LateUpdate boundary.
 
             // ── Cheap re-apply (rate unchanged) ───────────────────────────
             if (RateClose(rate, st.LastAppliedRate))
                 return;
 
+            // Cached states can alternate between actors without calling Find again.
+            BodyMeshSelection.Register(human);
+
+            // Calibration and cloth mapping always see original bind matrices.
+            if (_records.TryGetValue(stateKey, out var priorRecords)) ReleaseVirtual(priorRecords);
+            st.Virtual = null;
+
             // ── Locate bones ──────────────────────────────────────────────
             if (!st.BonesFound)
             {
-                if (!TryFindBones(human, st.SMR, st)) return;
+                if (!TryFindBones(human, st.SMR, st)) throw new InvalidOperationException("Rest-pose waist/spine bones not found.");
                 st.BonesFound = true;
                 st.FrameValid = false;
             }
 
             // ── Build frame ───────────────────────────────────────────────
-            if (!BuildFrame(st, st.SMR, out st.Frame)) return;
+            if (!BuildFrame(st, st.SMR, out st.Frame)) throw new InvalidOperationException("Cannot construct rest-pose torso frame.");
+            st.Profile ??= CalibrateTorso(human, st, st.Frame);
+            st.Frame.Profile = st.Profile;
             st.FrameValid = true;
 
             // Only log when rate actually changes — prevents flood when UI calls InvalidateAll()
@@ -327,6 +323,8 @@ namespace SVSPregnancy
                 RuntimeLogInfo($"[VtxMorph] id={charaId}: rate={rate:F3} " +
                                $"boneLen={st.Frame.BoneLen:F4} bindpose={st.Frame.BindPoseBased}");
                 st.LastLoggedRate = rate;
+                var egg = BellyShape.Growth(st.Profile, rate, BellyDeformSettings.Vtx);
+                RuntimeLogInfo($"[VtxMorph] GrowthEnvelope stage={rate:F3} bottom={egg.Bottom:F5} top={egg.Top:F5} width={egg.HalfWidth:F5} depth={egg.Depth:F5} centerZ={egg.AnteriorOffset:F5} smoothing={BellyDeformSettings.Vtx.WallSmoothing:F2} sag={BellyDeformSettings.Vtx.SagStrength:F2}");
             }
 
             if (!_records.ContainsKey(stateKey)) _records[stateKey] = new List<MeshRecord>();
@@ -334,59 +332,42 @@ namespace SVSPregnancy
             ApplySMR(_records[stateKey], st.SMR, st.Frame, rate,
                      st.BellyBoneIdxSet, st.LegBoneIdxSet, false, 1f, null);
             ApplyBodyLayerSMRs(human, charaId, _records[stateKey], st, rate);
+            ApplySkinShading(_records[stateKey],st.Frame);
 
             BodyAnchorContext bodyAnchor = CreateBodyAnchorContext(st.Frame);
-            MeshRecord bodyRec = FindRecord(_records[stateKey], st.SMR.sharedMesh);
-            if (bodyRec?.LastNewV != null)
-            {
-                AddBodyAnchorMesh(bodyAnchor, st.SMR, bodyRec, bodyRec.BellyMask, bodyRec.LastNewV, st.Frame);
-                FinalizeBodyAnchorContext(bodyAnchor);
-            }
+            foreach (var bodyRec in _records[stateKey])
+                if (bodyRec.Renderer != null && BodyMeshSelection.IsBodyPiece(bodyRec.Renderer) &&
+                    bodyRec.Renderer.enabled && bodyRec.Renderer.gameObject.activeInHierarchy && bodyRec.LastNewV != null &&
+                    !(bodyRec.Mesh.name ?? "").Contains("shadow", StringComparison.OrdinalIgnoreCase))
+                    AddBodyAnchorMesh(bodyAnchor, bodyRec.Renderer, bodyRec, bodyRec.BellyMask, bodyRec.LastNewV, st.Frame);
+            FinalizeBodyAnchorContext(bodyAnchor);
 
             ApplyClothSMRs(human, charaId, _records[stateKey], st, rate, bodyAnchor);
+            try { PrepareVirtual(st, _records[stateKey], rate); }
+            catch (Exception e) { ReleaseVirtual(_records[stateKey]); st.Virtual=null; Log.LogError("[VirtualAxis] Setup failed; native skinning retained: "+e); }
             st.LastAppliedRate = rate;
         }
 
-        public static void Reset(int charaId)
-        {
-            foreach (var key in KeysForChara(charaId))
-            {
-                if (_records.TryGetValue(key, out var recs))
-                    foreach (var rec in recs) UndoRecord(rec);
-                if (_state.TryGetValue(key, out var st))
-                {
-                    st.LastAppliedRate = float.NaN;
-                    st.LastSkippedInactive = false;
-                }
-            }
-        }
+        public static void Apply(Human human, int charaId, float rate) => SVSDeformationRuntime.Request(human, charaId, rate);
+        public static void Reset(int charaId) => SVSDeformationRuntime.ReleaseChara(charaId);
+        public static void Forget(int charaId) => SVSDeformationRuntime.ReleaseChara(charaId);
+        public static void ForgetAll() => SVSDeformationRuntime.ReleaseAll();
 
-        public static void Forget(int charaId)
+        internal static void ForgetHumanCore(Human human)
         {
-            // Undo any applied deformation BEFORE discarding records.
-            // Without this, the deformed mesh vertices persist and the next
-            // Apply() call captures them as the "original" baseline — causing
-            // the disc to accumulate across scene transitions.
-            foreach (var key in KeysForChara(charaId))
+            if (human == null) return;
+            foreach (var key in _state.Where(p => p.Value.HumanPtr == human.Pointer).Select(p => p.Key).ToArray())
             {
-                if (_records.TryGetValue(key, out var recs))
-                    foreach (var rec in recs) UndoRecord(rec);
-                _state.Remove(key);
+                if (_records.TryGetValue(key, out var records))
+                    foreach (var record in records) UndoRecord(record);
                 _records.Remove(key);
+                _state.Remove(key);
             }
-        }
-
-        public static void ForgetAll()
-        {
-            // Undo all applied deformations before clearing state.
-            foreach (var recs in _records.Values)
-                foreach (var rec in recs) UndoRecord(rec);
-            _state.Clear();
-            _records.Clear();
         }
 
         public static void InvalidateAll()
         {
+            SVSDeformationRuntime.RetryFailed();
             foreach (var st in _state.Values)
             {
                 st.LastAppliedRate = float.NaN;
@@ -397,8 +378,24 @@ namespace SVSPregnancy
             }
         }
 
+        public static void Invalidate(int charaId)
+        {
+            SVSDeformationRuntime.RetryFailed(charaId);
+            foreach (var key in KeysForChara(charaId))
+                if (_state.TryGetValue(key, out var st))
+                {
+                    st.LastAppliedRate = float.NaN;
+                    st.ClothEntries = null;
+                    st.LastClothApplied = -1;
+                    st.BodyLayerEntries = null;
+                    st.LastBodyLayerApplied = -1;
+                }
+        }
+
         public static string GetStatusLine(int charaId)
         {
+            var failure = SVSDeformationRuntime.FailureStatus(charaId);
+            if (failure != null) return failure;
             CharaState st = null;
             foreach (var v in _state.Values)
             {
@@ -417,7 +414,41 @@ namespace SVSPregnancy
                     : "bones=ok frame=invalid")
                 : "bones=NOT FOUND";
             string rat = float.IsNaN(st.LastAppliedRate) ? "rate=pending" : $"rate={st.LastAppliedRate:F3}";
-            return $"{smr}  {bone}  {rat}";
+            int moved = -1, visibleMoved = 0, visibleBodyPieces = 0, clothesMoved = 0, clothVerticesMoved = 0;
+            foreach (var records in _records.Values)
+                foreach (var record in records)
+                {
+                    if (record.Mesh == st.SMR?.sharedMesh) moved = record.LastDeformedCount;
+                    if (record.Renderer != null && record.Renderer.enabled && record.Renderer.gameObject.activeInHierarchy && BodyMeshSelection.IsBodyPiece(record.Renderer))
+                    {
+                        visibleBodyPieces++;
+                        visibleMoved += record.ActualMoved;
+                    }
+                    if (record.IsCloth && record.Renderer != null && record.Renderer.enabled &&
+                        record.Renderer.gameObject.activeInHierarchy && record.ActualMoved > 0)
+                    {
+                        clothesMoved++;
+                        clothVerticesMoved += record.ActualMoved;
+                    }
+                }
+            string axis=st.Virtual==null?"axis=off":st.Virtual.Failed?"axis=FAILED (see log)":$"axis={st.Virtual.Last.AngleDegrees:F1}deg pull={st.Virtual.Last.Pull:F2}";
+            return $"{smr}  {bone}  {rat}  moved={moved} visibleBody={visibleBodyPieces} visibleMoved={visibleMoved} clothMapped={st.ClothEntries?.Count ?? 0} clothMoved={clothesMoved}({clothVerticesMoved}v) {axis}";
+        }
+
+        public static string GetNavelStatus(int charaId)
+        {
+            foreach(var state in _state.Values)
+                if(state.CharaId==charaId && state.Profile!=null)
+                    return float.IsFinite(state.Profile.SkinNavelZ)?"Original navel detected":"No original navel detected: controls inactive";
+            return "Enable Preview to detect original navel";
+        }
+
+        public static bool HasValidBody(int charaId)
+        {
+            foreach (var state in _state.Values)
+                if (state.CharaId == charaId && state.BonesFound && state.FrameValid &&
+                    state.SMR != null && MeshLease.Owns(state.SMR.sharedMesh)) return true;
+            return false;
         }
 
         public static void DumpInfo(Human human, int charaId)
@@ -476,7 +507,27 @@ namespace SVSPregnancy
                     if (rec.BellyMask != null) foreach (var m in rec.BellyMask) if (m) masked++;
                     Log.LogInfo($"[VtxDump]  MeshRecord mesh={rec.Mesh?.name} " +
                                 $"origVerts={rec.OrigVerts?.Length ?? -1} bellyMask={masked}/{rec.BellyMask?.Length ?? 0}");
+                    try
+                    {
+                        Vector3[] live = rec.Mesh.vertices;
+                        Vector3[] expected = rec.LastNewV ?? rec.OrigVerts;
+                        int mismatches = 0, liveMoved = 0;
+                        float maxDelta = 0;
+                        if (live.Length != expected.Length) mismatches = -1;
+                        else for (int i = 0; i < live.Length; i++)
+                        {
+                            if ((live[i] - expected[i]).sqrMagnitude > 1e-12f) mismatches++;
+                            float distance = (live[i] - rec.OrigVerts[i]).magnitude;
+                            if (distance > 1e-6f) liveMoved++;
+                            maxDelta = Mathf.Max(maxDelta, distance);
+                        }
+                        bool attached = rec.Renderer != null && rec.Renderer.sharedMesh == rec.Mesh;
+                        bool active = rec.Renderer != null && rec.Renderer.enabled && rec.Renderer.gameObject.activeInHierarchy;
+                        Log.LogInfo($"[VtxDump] Readback mesh={rec.Mesh.name} attached={attached} active={active} liveMoved={liveMoved} mismatches={mismatches} maxMeshDelta={maxDelta:F5}");
+                    }
+                    catch (Exception ex) { Log.LogWarning("[VtxDump] Readback: " + ex); }
             }
+            WriteGeometrySnapshot(human, st, recs);
             Log.LogInfo($"[VtxDump] ===== end =====");
         }
 
@@ -935,37 +986,8 @@ namespace SVSPregnancy
 
         private static SkinnedMeshRenderer FindBodySMR(Human human)
         {
-            SkinnedMeshRenderer best = null; int bestV = 0;
-            try
-            {
-                var all = human.gameObject.GetComponentsInChildren<SkinnedMeshRenderer>(true);
-                if (all != null)
-                {
-                    foreach (var s in all) { if (s?.sharedMesh == null || !s.sharedMesh.isReadable) continue; if (s.name == "o_body" && s.gameObject.activeInHierarchy)  { RuntimeLogInfo($"[VtxMorph] FindBodySMR: active o_body"); return s; } }
-                    foreach (var s in all) { if (s?.sharedMesh == null || !s.sharedMesh.isReadable) continue; if (s.name == "o_body") { RuntimeLogInfo($"[VtxMorph] FindBodySMR: inactive o_body"); return s; } }
-                    foreach (var s in all) { if (s?.sharedMesh == null || !s.sharedMesh.isReadable || IsFaceMesh(s)) continue; int v = s.sharedMesh.vertexCount; if (v > bestV) { best = s; bestV = v; } }
-                }
-                Transform br = human?.body?.trfBodyBone;
-                if (br != null && best == null)
-                {
-                    Transform sf = br; for (int i = 0; i < 4 && sf.parent != null; i++) sf = sf.parent;
-                    if (sf.gameObject != human.gameObject)
-                    {
-                        var ba = sf.GetComponentsInChildren<SkinnedMeshRenderer>(true);
-                        if (ba != null)
-                        {
-                            foreach (var s in ba) { if (s?.sharedMesh == null || !s.sharedMesh.isReadable) continue; if (s.name == "o_body" && s.gameObject.activeInHierarchy) return s; }
-                            foreach (var s in ba) { if (s?.sharedMesh == null || !s.sharedMesh.isReadable) continue; if (s.name == "o_body") return s; }
-                            foreach (var s in ba) { if (s?.sharedMesh == null || !s.sharedMesh.isReadable || IsFaceMesh(s)) continue; int v = s.sharedMesh.vertexCount; if (v > bestV) { best = s; bestV = v; } }
-                        }
-                    }
-                }
-            }
-            catch (Exception e) { Log.LogWarning("[VtxMorph] FindBodySMR: " + e.Message); }
-            if (best != null) RuntimeLogInfo($"[VtxMorph] FindBodySMR: fallback \"{best.name}\" ({bestV}v)");
-            return best;
+            return BodyMeshSelection.Find(human);
         }
-
         private static bool IsFaceMesh(SkinnedMeshRenderer smr)
         {
             string id = ((smr.name ?? "") + "/" + (smr.gameObject?.name ?? "")).ToLowerInvariant();
@@ -1055,6 +1077,10 @@ namespace SVSPregnancy
                             st.LegBoneIdxSet.Add(i);
                     }
 
+                    // Use the same deterministic candidate priority as torso selection.
+                    Transform[] boneArray = smrBones;
+                    st.PelvisIdx = BodyMeshSelection.FindBone(boneArray, BodyMeshSelection.PelvisNames);
+                    st.SpineIdx = BodyMeshSelection.FindBone(boneArray, BodyMeshSelection.SpineNames);
                     if (verbose)
                         RuntimeLogInfo($"[VtxMorph] TryFindBones smr.bones={bc}: " +
                                        $"pelvisIdx={st.PelvisIdx} spineIdx={st.SpineIdx} " +
@@ -1076,7 +1102,7 @@ namespace SVSPregnancy
         // ── Frame construction ────────────────────────────────────────────
         //
         // Preferred: bindposes (pose-independent).
-        // Fallback:  live bone positions via InverseTransformPoint (pose-dependent).
+        // Missing bind poses are rejected; never substitute animated bone positions.
 
         private static bool BuildFrame(CharaState st, SkinnedMeshRenderer smr, out LocalFrame frame, bool verbose = true)
         {
@@ -1107,12 +1133,10 @@ namespace SVSPregnancy
                 LiveFallback:
                 {
                     if (st.PelvisTf == null || st.SpineTf == null) return false;
-                    Transform root = null;
-                    try { root = smr.rootBone?.parent ?? smr.rootBone ?? smr.transform; }
-                    catch { root = smr.transform; }
-                    pelvisL = root.InverseTransformPoint(st.PelvisTf.position);
-                    spineL  = root.InverseTransformPoint(st.SpineTf.position);
-                    if (verbose) Log.LogWarning("[VtxMorph] BuildFrame: LIVE FALLBACK (pose-dependent)");
+                    // Live transforms are not in rest mesh coordinates in AL. Do not
+                    // silently deform around an animated or scene-offset origin.
+                    if (verbose) Log.LogWarning("[VtxMorph] Missing rest-pose waist/spine; preview cannot use this mesh.");
+                    return false;
                 }
 
                 AfterPelvisSpine:
@@ -1120,6 +1144,20 @@ namespace SVSPregnancy
                 if (upRaw.sqrMagnitude < 1e-8f) return false;
                 float   boneLen = upRaw.magnitude;
                 Vector3 up      = upRaw / boneLen;
+                int upperIndex = BodyMeshSelection.FindBone(smr.bones, new[] { "cf_s_spine03" });
+                if (upperIndex >= 0 && upperIndex < smr.sharedMesh.bindposes.Length)
+                {
+                    var upper = smr.sharedMesh.bindposes[upperIndex].inverse.MultiplyPoint3x4(Vector3.zero);
+                    var oriented = TorsoLandmarks.OrientUp(
+                        new System.Numerics.Vector3(up.x, up.y, up.z),
+                        new System.Numerics.Vector3(pelvisL.x, pelvisL.y, pelvisL.z),
+                        new System.Numerics.Vector3(upper.x, upper.y, upper.z));
+                    up = new Vector3(oriented.X, oriented.Y, oriented.Z);
+                }
+                // This recorded AL rest mesh is Y-up. Snap a near-vertical short
+                // helper-bone axis to mesh vertical to avoid lifting the navel
+                // merely because the forward axis was tilted by five percent.
+                if (Vector3.Dot(up, Vector3.up) > 0.98f) up = Vector3.up;
 
                 // Lateral axis from thigh bones
                 Vector3 right = Vector3.right;
@@ -1133,14 +1171,6 @@ namespace SVSPregnancy
                         if (bp.Length > st.LThighIdx && bp.Length > st.RThighIdx)
                         { lL = bp[st.LThighIdx].inverse.MultiplyPoint3x4(Vector3.zero); rL = bp[st.RThighIdx].inverse.MultiplyPoint3x4(Vector3.zero); gotLat = true; }
                     }
-                    if (!gotLat && st.LThighTf != null && st.RThighTf != null)
-                    {
-                        Transform root2 = null;
-                        try { root2 = smr.rootBone?.parent ?? smr.rootBone ?? smr.transform; } catch { root2 = smr.transform; }
-                        lL = root2.InverseTransformPoint(st.LThighTf.position);
-                        rL = root2.InverseTransformPoint(st.RThighTf.position);
-                        gotLat = true;
-                    }
                     if (gotLat)
                     {
                         Vector3 tv = rL - lL; tv -= up * Vector3.Dot(tv, up);
@@ -1152,13 +1182,10 @@ namespace SVSPregnancy
                 Vector3 fwd = Vector3.Cross(up, right).normalized;
                 if (Vector3.Dot(fwd, Vector3.forward) < 0f) { fwd = -fwd; right = Vector3.Cross(up, fwd).normalized; }
 
-                var p = BellyDeformSettings.Vtx;
-                Vector3 center = Vector3.Lerp(pelvisL, spineL, Mathf.Clamp01(p.SpineLerpT))
-                               + up  * (p.MoveY * boneLen)
-                               + fwd * (p.MoveZ * boneLen);
+                Vector3 center = pelvisL;
 
                 frame = new LocalFrame { Center = center, Up = up, Fwd = fwd, Right = right, BoneLen = boneLen, BindPoseBased = bindPoseUsed };
-                if (verbose) RuntimeLogInfo($"[VtxMorph] BuildFrame: center={center} boneLen={boneLen:F4} bindpose={bindPoseUsed}");
+                if (verbose) RuntimeLogInfo($"[VtxMorph] BuildFrame: center={center:F5} boneLen={boneLen:F5} bindpose={bindPoseUsed} pelvis={pelvisL:F5} spine={spineL:F5} up={up:F5} right={right:F5} forward={fwd:F5} model=shared-abdomen-membrane");
                 return true;
             }
             catch (Exception e) { if (verbose) Log.LogWarning("[VtxMorph] BuildFrame: " + e.Message); return false; }
@@ -1192,11 +1219,18 @@ namespace SVSPregnancy
                             continue;
                         }
 
+                        if (!TryComputeClothBodyMatrix(smr, st.SMR, out var toBody, out var fromBody, smr.name))
+                        {
+                            skipped++;
+                            continue;
+                        }
                         st.BodyLayerEntries.Add(new BodyLayerEntry
                         {
                             SMR = smr,
                             BellyBoneIdxSet = tmp.BellyBoneIdxSet,
                             LegBoneIdxSet = tmp.LegBoneIdxSet,
+                            ToBody = toBody,
+                            FromBody = fromBody,
                         });
                     }
 
@@ -1216,7 +1250,8 @@ namespace SVSPregnancy
 
                     // Standard body-layer processing (handles reset when deformed=0, preserves normals).
                     ApplySMR(recs, smr, st.Frame, rate, entry.BellyBoneIdxSet, entry.LegBoneIdxSet, false, 1f, null,
-                             skipNormalRecalc: true);
+                             hasMeshConversion: true, clothToBodyMatrix: entry.ToBody, bodyToClothMatrix: entry.FromBody,
+                             skipNormalRecalc: !BodyMeshSelection.IsBodyPiece(smr));
 
                     // Nipple overlay meshes (mnpa = areola, mnpb = nipple tip) sit exactly on the
                     // body surface.  When belly deformation shifts low-bw body verts at the areola
@@ -1230,8 +1265,12 @@ namespace SVSPregnancy
                         {
                             // Build (and cache) nearest-body-vert index for each overlay vert.
                             if (entry.NearestBodyVertIdx == null)
-                                entry.NearestBodyVertIdx = BuildNearestBodyVertCache(
-                                    overlayRec.OrigVerts, bodyRec.OrigVerts);
+                            {
+                                var bodySpaceVerts = new Vector3[overlayRec.OrigVerts.Length];
+                                for (int i = 0; i < bodySpaceVerts.Length; i++)
+                                    bodySpaceVerts[i] = entry.ToBody.MultiplyPoint3x4(overlayRec.OrigVerts[i]);
+                                entry.NearestBodyVertIdx = BuildNearestBodyVertCache(bodySpaceVerts, bodyRec.OrigVerts);
+                            }
 
                             // Accumulate a narrow NippleGuard on the body record from every
                             // mnpa/mnpb overlay that is processed.  Multiple overlays (left/right
@@ -1247,12 +1286,14 @@ namespace SVSPregnancy
                             var newV = new Vector3[on];
                             for (int i = 0; i < on; i++)
                             {
+                                if (BreastExclusion.Contains(overlayRec.BreastExcluded, i))
+                                { newV[i] = overlayRec.OrigVerts[i]; continue; }
                                 int bj = (entry.NearestBodyVertIdx != null && i < entry.NearestBodyVertIdx.Length)
                                          ? entry.NearestBodyVertIdx[i] : -1;
                                 Vector3 delta = (bj >= 0)
                                     ? bodyRec.LastNewV[bj] - bodyRec.OrigVerts[bj]
                                     : Vector3.zero;
-                                newV[i] = overlayRec.OrigVerts[i] + delta;
+                                newV[i] = overlayRec.OrigVerts[i] + entry.FromBody.MultiplyVector(delta);
                             }
 
                             smr.sharedMesh.vertices = newV;
@@ -1265,6 +1306,7 @@ namespace SVSPregnancy
                             else
                                 try { smr.sharedMesh.RecalculateNormals(); } catch { }
                             try { smr.sharedMesh.RecalculateTangents(); } catch { }
+                            RestoreExcludedBreastShading(overlayRec);
                             smr.sharedMesh.RecalculateBounds();
                         }
                     }
@@ -1304,6 +1346,7 @@ namespace SVSPregnancy
                     try { bodyBpCount = st.SMR?.sharedMesh?.bindposes?.Length ?? 0; } catch { }
 
                     int seen = 0, skipped = 0;
+                    var pending = new List<ClothEntry>();
                     foreach (var smr in all)
                     {
                         if (!IsBodyMorphClothSMR(smr, st.SMR)) continue;
@@ -1331,21 +1374,48 @@ namespace SVSPregnancy
                         try { clothBpCount = smr.sharedMesh?.bindposes?.Length ?? 0; } catch { }
                         bool bpThreshold = bodyBpCount > 0 && clothBpCount >= bodyBpCount - 2;
                         RuntimeLogInfo($"[VtxMorph] ClothCache id={charaId}: smr=\"{smr.name}\" clothBp={clothBpCount} bodyBp={bodyBpCount} bpThreshold={bpThreshold}");
-                        if (bpThreshold && TryComputeClothBodyMatrix(smr, st.SMR, out var c2b, out var b2c, smr.name))
+                        if (TryComputeClothBodyMatrix(smr, st.SMR, out var c2b, out var b2c, smr.name, allowAliases: true))
                         {
                             entry.HasMeshConversion = true;
                             entry.ClothToBody = c2b;
                             entry.BodyToCloth = b2c;
                             RuntimeLogInfo($"[VtxMorph] ClothCache id={charaId}: full-rig cloth \"{smr.name}\" bindposes={clothBpCount} — mesh conversion computed");
                         }
-                        else if (bpThreshold)
+                        else
                         {
-                            RuntimeLogInfo($"[VtxMorph] ClothCache id={charaId}: smr=\"{smr.name}\" TryComputeClothBodyMatrix returned FALSE");
+                            pending.Add(entry);
+                            continue;
                         }
 
                         st.ClothEntries.Add(entry);
                     }
 
+                    bool progress;
+                    do
+                    {
+                        progress = false;
+                        for (int i = pending.Count - 1; i >= 0; i--)
+                        {
+                            var entry = pending[i];
+                            ClothEntry bridge = null;
+                            Matrix4x4 map = default, inverse = default;
+                            foreach (var donor in st.ClothEntries)
+                                if (TryComputeClothBodyMatrix(entry.SMR, donor.SMR, out var toDonor, out _, null))
+                                {
+                                    var managed = MatrixBridge.ToManaged(toDonor) * MatrixBridge.ToManaged(donor.ClothToBody);
+                                    if (!System.Numerics.Matrix4x4.Invert(managed, out var back)) continue;
+                                    map = MatrixBridge.ToUnity(managed); inverse = MatrixBridge.ToUnity(back);
+                                    bridge = donor; break;
+                                }
+                            if (bridge == null) continue;
+                            entry.HasMeshConversion = true; entry.ClothToBody = map; entry.BodyToCloth = inverse;
+                            st.ClothEntries.Add(entry); pending.RemoveAt(i); progress = true;
+                            RuntimeLogInfo($"[VtxMorph] ClothBridge {entry.SMR.name} via={bridge.SMR.name} valid=True");
+                        }
+                    } while (progress && pending.Count > 0);
+                    skipped += pending.Count;
+                    foreach (var entry in pending)
+                        RuntimeLogInfo($"[VtxMorph] ClothUnmapped {entry.SMR.name}: no validated rest-space route");
                     RuntimeLogInfo($"[VtxMorph] ClothCache id={charaId}: cached={st.ClothEntries.Count}/{seen} skipped={skipped}");
                 }
 
@@ -1354,7 +1424,10 @@ namespace SVSPregnancy
                 {
                     var smr = entry?.SMR;
                     if (smr == null || smr.sharedMesh == null || !smr.sharedMesh.isReadable) continue;
-                    ApplySMR(recs, smr, st.Frame, rate, entry.BellyBoneIdxSet, entry.LegBoneIdxSet, true, ClothMultiplier(entry.Kind), bodyAnchor, st.SMR.transform,
+                    // Hidden variants still act as coordinate donors above. The lease
+                    // resets when visibility changes, so only visible garments need writes.
+                    if (!smr.enabled || !smr.gameObject.activeInHierarchy) continue;
+                    ApplySMR(recs, smr, st.Frame, rate, entry.BellyBoneIdxSet, entry.LegBoneIdxSet, true, ClothMultiplier(entry.Kind), bodyAnchor,
                              entry.HasMeshConversion, entry.ClothToBody, entry.BodyToCloth);
                     applied++;
                 }
@@ -1381,6 +1454,7 @@ namespace SVSPregnancy
             try
             {
                 if (smr == null || smr.sharedMesh == null) return false;
+                if (BodyMeshSelection.IsBodyPiece(smr)) return false;
                 if (bodySMR != null && smr == bodySMR) return false;
                 if (bodySMR?.sharedMesh != null && smr.sharedMesh == bodySMR.sharedMesh) return false;
                 if (!smr.sharedMesh.isReadable || smr.sharedMesh.vertexCount <= 0) return false;
@@ -1439,7 +1513,8 @@ namespace SVSPregnancy
                 if (id.Contains("o_hit_") || id.Contains("/n_cm_hit/") || id.Contains("/n_cf_hit/"))
                     return false;
 
-                return id.Contains("nail")
+                return BodyMeshSelection.IsBodyPiece(smr)
+                    || id.Contains("nail")
                     || id.Contains("/n_mnp")
                     || id.Contains("mnpa")
                     || id.Contains("mnpb")
@@ -1488,16 +1563,6 @@ namespace SVSPregnancy
             };
         }
 
-        private static Vector3 ToBodyLocal(Transform sourceTf, Transform bodyTf, Vector3 sourceLocal)
-        {
-            return bodyTf.InverseTransformPoint(sourceTf.TransformPoint(sourceLocal));
-        }
-
-        private static Vector3 FromBodyLocal(Transform sourceTf, Transform bodyTf, Vector3 bodyLocal)
-        {
-            return sourceTf.InverseTransformPoint(bodyTf.TransformPoint(bodyLocal));
-        }
-
         private static bool MeshReadable(Mesh mesh)
         {
             try { return mesh != null && mesh.isReadable; }
@@ -1516,7 +1581,6 @@ namespace SVSPregnancy
             bool isCloth,
             float clothMultiplier,
             BodyAnchorContext bodyAnchor,
-            Transform bodyTransform = null,
             bool hasMeshConversion = false,
             Matrix4x4 clothToBodyMatrix = default,
             Matrix4x4 bodyToClothMatrix = default,
@@ -1525,6 +1589,7 @@ namespace SVSPregnancy
             try
             {
                 Mesh mesh = smr.sharedMesh;
+                if (!MeshLease.Owns(mesh)) return;
 
                 MeshRecord rec = null;
                 foreach (var r in recs) if (r != null && r.Mesh == mesh) { rec = r; break; }
@@ -1537,13 +1602,13 @@ namespace SVSPregnancy
 
                 if (rec == null)
                 {
-                    rec = new MeshRecord { Mesh = mesh, OrigVerts = (Vector3[])cur.Clone() };
+                    rec = new MeshRecord { Renderer = smr, IsCloth = isCloth, Mesh = mesh, OrigVerts = (Vector3[])cur.Clone() };
                     // Body keeps PP-style bone filtering. Clothes use the original
                     // geometric selection, then only actually moved vertices enter
                     // the cloth/body-anchor cleanup path.
-                    rec.BellyMask       = isCloth ? null : ComputeBellyMask(mesh, cur.Length, bellyBoneSet, legBoneSet);
+                    rec.BellyInfluence = isCloth ? null : ComputeBellyInfluence(mesh, cur.Length, bellyBoneSet, legBoneSet);
+                    rec.BellyMask = rec.BellyInfluence == null ? null : Array.ConvertAll(rec.BellyInfluence, w => w > 0f);
                     rec.BreastWeights   = ComputeBreastWeights(mesh, cur.Length, smr);
-                    rec.SoftBreastGuard = ComputeSoftBreastGuard(mesh, cur.Length, rec.BreastWeights);
                     rec.NormalWeldGroup = ComputeNormalWeldGroup(cur);
                     rec.OrigNormals     = mesh.normals;
                     rec.OrigTangents    = mesh.tangents;
@@ -1557,50 +1622,38 @@ namespace SVSPregnancy
                 {
                     rec.OrigVerts = (Vector3[])cur.Clone();
                 }
+                rec.ToReference = hasMeshConversion ? MatrixBridge.ToManaged(clothToBodyMatrix) : System.Numerics.Matrix4x4.Identity;
 
-                var p       = BellyDeformSettings.Vtx;
-                float boneLen = fr.BoneLen;
-                float scale   = Mathf.Max(0.01f, p.InflationSize);
-                float rS = Mathf.Max(p.RadiusSide,  1e-4f) * scale * boneLen;
-                float rF = Mathf.Max(p.RadiusFront, 1e-4f) * scale * boneLen;
-                float rB = Mathf.Max(p.RadiusBack,  1e-4f) * scale * boneLen;
-                float rU = Mathf.Max(p.RadiusUp,    1e-4f) * scale * boneLen;
-                float rD = Mathf.Max(p.RadiusDown,  1e-4f) * scale * boneLen;
-
-                // ── RoundToSides parameters (PP source formula) ───────────
-                // Smooth distance = rB + (rF-rB)/3 when rF > rB, else rB.
-                float rtsSmoothDist = Mathf.Max(rB + (rF > rB ? (rF - rB) / 3f : 0f), 1e-4f);
-
-                // ── Rate-scale parameters not already gated by str ────────
-                // str = rate × edge-falloff already scales the sphere-projection,
-                // ShiftY/Z, Drop, and FatFold.  Roundness, Stretch, and Taper
-                // are transforms applied AFTER the projection and would otherwise
-                // be at full value on day startDay+1.  Multiply by rate so that
-                // all deformation effects grow in proportion to pregnancy progress.
-                float effRoundness = p.Roundness * rate;
-                float effStretchX  = p.StretchX  * rate;
-                float effStretchY  = p.StretchY  * rate;
-                float effStretchZ  = p.StretchZ  * rate;
-                float effTaperY    = p.TaperY    * rate;
-                float effTaperZ    = p.TaperZ    * rate;
+                var p = BellyDeformSettings.Vtx;
+                rec.BreastExcluded = BreastExclusion.Build(rec.BreastWeights, rec.OrigVerts.Length, rec.NormalWeldGroup, p.BreastExclusionEnabled);
+                // Garments without breast bones can still cover a breast surface.
+                // Reuse the existing closest-body correspondence only for this mask.
+                if (p.BreastExclusionEnabled && isCloth && bodyAnchor != null)
+                {
+                    float reachSq = fr.Profile.Span * fr.Profile.Span * .04f;
+                    for (int i = 0; i < rec.OrigVerts.Length; i++)
+                    {
+                        if (rec.BreastExcluded[i]) continue;
+                        var point = hasMeshConversion ? clothToBodyMatrix.MultiplyPoint3x4(rec.OrigVerts[i]) : rec.OrigVerts[i];
+                        if (TryFindNearestBodyAnchorPoint(bodyAnchor, point, false, out var anchor) &&
+                            (anchor.Original - point).sqrMagnitude <= reachSq &&
+                            BreastExclusion.Contains(bodyAnchor.Meshes[anchor.MeshIndex].BreastExcluded, anchor.VertexIndex))
+                            rec.BreastExcluded[i] = true;
+                    }
+                    BreastExclusion.ShareWelds(rec.BreastExcluded, rec.NormalWeldGroup);
+                }
 
                 int n    = rec.OrigVerts.Length;
                 var newV = new Vector3[n];
                 bool[] moved = isCloth ? new bool[n] : null;
                 Vector3[] bodyOrig = isCloth ? new Vector3[n] : null;
                 Vector3[] bodyNew  = isCloth ? new Vector3[n] : null;
-                Transform sourceTransform = null;
-                try { sourceTransform = smr.transform; } catch { }
-                Transform morphTransform = bodyTransform != null ? bodyTransform : sourceTransform;
-                bool useBodySpace = isCloth && sourceTransform != null && morphTransform != null && sourceTransform != morphTransform;
                 int deformed = 0;
-                bool[] mask = rec.BellyMask;
 
                 for (int i = 0; i < n; i++)
                 {
                     Vector3 sourceLv = rec.OrigVerts[i];
                     Vector3 lv = hasMeshConversion ? clothToBodyMatrix.MultiplyPoint3x4(sourceLv)
-                               : useBodySpace ? ToBodyLocal(sourceTransform, morphTransform, sourceLv)
                                : sourceLv;
                     newV[i] = sourceLv;
                     if (bodyOrig != null)
@@ -1610,190 +1663,52 @@ namespace SVSPregnancy
                     }
 
                     // ── Bone-weight filter (PP mechanism #2 / #3) ─────────
-                    // BellyMask = null means no filtering (bones not found or too few passed)
-                    if (mask != null && !mask[i]) continue;
+                    // Skin uses continuous weight values; clothing has no binary mask.
+                    if (rec.BreastExcluded[i]) continue;
 
-                    Vector3 d   = lv - fr.Center;
-                    float upD   = Vector3.Dot(d, fr.Up);
-                    float sdD   = Vector3.Dot(d, fr.Right);
-                    float fwD   = Vector3.Dot(d, fr.Fwd);
-                    float fwR   = fwD >= 0f ? rF : rB;
-                    float upR   = upD >= 0f ? rD : rU;   // rD=upper-belly half, rU=lower-belly half (spine is below pelvis in bindpose)
+                    Vector3 d = lv - fr.Center;
+                    var local = new System.Numerics.Vector3(Vector3.Dot(d, fr.Right), Vector3.Dot(d, fr.Up), Vector3.Dot(d, fr.Fwd));
+                    float influence = BellyShape.DeformationInfluence(rec.BellyInfluence == null ? 1f : rec.BellyInfluence[i], local.Y, fr.Profile, p);
+                    if (influence <= 0) continue;
+                    var shape = BellyShape.Deform(local, fr.Profile, rate, p);
+                    var delta = shape - local;
+                    Vector3 nlv = lv + fr.Right * delta.X + fr.Up * delta.Y + fr.Fwd * delta.Z;
+                    nlv = Vector3.Lerp(lv, nlv, influence);
 
-                    float e = (sdD / rS) * (sdD / rS)
-                            + (fwD / fwR) * (fwD / fwR)
-                            + (upD / upR) * (upD / upR);
-                    if (e >= 1f)
-                        continue;
-
-                    float sqrtE = Mathf.Sqrt(e);
-
-                    // ── EdgeSmooth (inner boundary falloff) ───────────────
-                    float coreR = 1f - Mathf.Clamp01(p.EdgeSmooth) * 0.5f;
-                    float tEdge = Mathf.Clamp01((sqrtE - coreR) / Mathf.Max(1f - coreR, 1e-4f));
-                    float str   = rate * (1f - tEdge * tEdge * (3f - 2f * tEdge));
-
-                    // ── RoundToSides (PP mechanism #4) ────────────────────
-                    // forwardFromBack: 0 at belly back edge, (rF+rB) at front.
-                    // Soft-ramp from 0 → 1 over [0, rtsSmoothDist].
-                    float forwardFromBack = fwD + rB;
-                    if (forwardFromBack <= 0f)
-                        continue; // behind belly, skip
-                    float rtsT = forwardFromBack >= rtsSmoothDist ? 1f
-                               : Mathf.Clamp01(forwardFromBack / rtsSmoothDist);
-                    float rts  = rtsT * rtsT * (3f - 2f * rtsT); // SmoothStep ≈ PP's AnimationCurve
-                    str *= rts;
-
-                    if (str <= 1e-5f)
-                        continue;
-
-                    // ── Sphere projection (PP core formula) ───────────────
-                    float dm   = d.magnitude;
-                    if (dm < 1e-6f) { d = fr.Fwd; dm = 1f; }
-                    float sphereR = dm / Mathf.Max(sqrtE, 1e-4f);
-                    Vector3 nlv   = Vector3.Lerp(lv, fr.Center + d.normalized * sphereR, str);
-
-                    // ── Roundness ─────────────────────────────────────────
-                    if (effRoundness != 0f)
-                    {
-                        float avgR = (rS + (rF + rB) * 0.5f + (rU + rD) * 0.5f) / 3f;
-                        Vector3 toC = nlv - fr.Center; float magC = toC.magnitude;
-                        if (magC > 1e-6f)
-                            nlv = Vector3.Lerp(nlv, fr.Center + toC * (avgR / magC),
-                                      Mathf.Clamp(effRoundness, -1f, 1f));
-                    }
-
-                    // ── Stretch ───────────────────────────────────────────
-                    float sx = Mathf.Max(0.01f, 1f + effStretchX);
-                    float sy = Mathf.Max(0.01f, 1f + effStretchY);
-                    float sz = Mathf.Max(0.01f, 1f + effStretchZ);
-                    if (sx != 1f || sy != 1f || sz != 1f)
-                    {
-                        Vector3 rel = nlv - fr.Center;
-                        nlv = fr.Center
-                            + fr.Right * (Vector3.Dot(rel, fr.Right) * sx)
-                            + fr.Up    * (Vector3.Dot(rel, fr.Up)    * sy)
-                            + fr.Fwd   * (Vector3.Dot(rel, fr.Fwd)   * sz);
-                    }
-
-                    // ── TaperY (×0.5 scale — PP tuning) ──────────────────
-                    if (effTaperY != 0f)
-                    {
-                        Vector3 rel = nlv - fr.Center;
-                        float upC   = Vector3.Dot(rel, fr.Up);
-                        float hNorm = Mathf.Clamp(upC >= 0f ? upC / Mathf.Max(rU, 1e-4f) : upC / Mathf.Max(rD, 1e-4f), -1f, 1f);
-                        float fac   = Mathf.Clamp(1f - hNorm * effTaperY * 0.5f, 0.1f, 2f);
-                        nlv = fr.Center + fr.Up * upC
-                            + fr.Right * (Vector3.Dot(rel, fr.Right) * fac)
-                            + fr.Fwd   * (Vector3.Dot(rel, fr.Fwd)   * fac);
-                    }
-
-                    // ── TaperZ (×0.5 scale) ───────────────────────────────
-                    if (effTaperZ != 0f)
-                    {
-                        Vector3 rel  = nlv - fr.Center;
-                        float fwdC   = Vector3.Dot(rel, fr.Fwd);
-                        float dNorm  = Mathf.Clamp(fwdC >= 0f ? fwdC / Mathf.Max(rF, 1e-4f) : fwdC / Mathf.Max(rB, 1e-4f), -1f, 1f);
-                        float fac    = Mathf.Clamp(1f - dNorm * effTaperZ * 0.5f, 0.1f, 2f);
-                        nlv = fr.Center + fr.Fwd * fwdC
-                            + fr.Up    * (Vector3.Dot(rel, fr.Up)    * fac)
-                            + fr.Right * (Vector3.Dot(rel, fr.Right) * fac);
-                    }
-
-                    // ── Shift ─────────────────────────────────────────────
-                    if (p.ShiftY != 0f) nlv += fr.Up  * (p.ShiftY * boneLen * str);
-                    if (p.ShiftZ != 0f) nlv += fr.Fwd * (p.ShiftZ * boneLen * str);
-
-                    // ── Drop ──────────────────────────────────────────────
-                    if (p.Drop != 0f)
-                    {
-                        float ff = Mathf.Clamp01(fwD / Mathf.Max(rF * 1.5f, 1e-4f));
-                        nlv -= fr.Up * (rF * p.Drop * ff * str);
-                    }
-
-                    // ── ReduceRibStretchingZ (PP mechanism #5) ────────────
-                    // Upper 70% of belly: gradually reduce forward push to avoid chest clip.
-                    if (upD > rU * 0.3f)
-                    {
-                        float ribFrac = Mathf.Clamp01((upD - rU * 0.3f) / (rU * 0.7f));
-                        float fwdDisp = Vector3.Dot(nlv - lv, fr.Fwd);
-                        if (fwdDisp > 0f)
-                            nlv -= fr.Fwd * (fwdDisp * ribFrac * 0.4f);
-                    }
-
-                    // ── FatFold ───────────────────────────────────────────
-                    if (p.FatFold > 0f && fwD > 0f)
-                    {
-                        float fc   = -p.FatFoldHeight * rD;
-                        float fw2  = Mathf.Max(0.005f, p.FatFoldGap * rD);
-                        float dist = upD - fc;
-                        float gaus = Mathf.Exp(-(dist * dist) / (2f * fw2 * fw2));
-                        float ffrac = Mathf.Clamp01(fwD / rF);
-                        nlv -= fr.Fwd * (p.FatFold * rF * gaus * ffrac * str);
-                    }
-
-                    // ── Back-face limiter ─────────────────────────────────
-                    if (p.BackLimit > 0f && p.BackStrength > 0f && fwD < 0f)
-                    {
-                        float planeD = -(p.BackLimit * rB);
-                        if (fwD < planeD)
-                        {
-                            float rangeD = Mathf.Max(p.BackSmooth * rB, 1e-5f);
-                            float beyond = planeD - fwD;
-                            float t      = Mathf.Clamp01(beyond / rangeD);
-                            float sm     = t * t * (3f - 2f * t);
-                            nlv = Vector3.Lerp(nlv, lv, sm * p.BackStrength);
-                        }
-                    }
-
-                    // ── Breast guard (COM3D2-style bone-weight restore) ────
-                    // Vertices that are skinned to breast bones are lerped back toward
-                    // their original positions so that increasing RadiusUp does not
-                    // pull the breasts forward.  The raw per-vertex breast-bone weight
-                    // is stored in rec.BreastWeights; the user-facing multiplier
-                    // (BreastGuardStrength) is applied here at runtime so that changing
-                    // the slider takes effect without a full record invalidation.
-                    //
-                    // 1-ring SoftBreastGuard spillover is used here so that the verts
-                    // immediately adjacent to breast verts are also gently pulled back,
-                    // smoothing the position cliff at the breast/belly boundary.
-                    // Using more than 1 ring creates a visible "plateau" shadow; using
-                    // none at all leaves a hard cliff that makes the areola ring reappear.
-                    var guardArr = rec.BreastWeights;
-                    if (guardArr != null && guardArr[i] > 0f)
-                    {
-                        float bgStr = Mathf.Max(0f, p.BreastGuardStrength);
-                        if (bgStr > 0f)
-                        {
-                            float restore = Mathf.Clamp01(guardArr[i] * 4f * bgStr);
-                            if (restore >= 1f)
-                            {
-                                if (bodyNew != null) bodyNew[i] = lv;
-                                else newV[i] = lv;
-                                continue;
-                            }   // fully blocked — no deformation
-                            nlv = Vector3.Lerp(nlv, lv, restore);
-                        }
-                    }
+                    // Breast-owned vertices were excluded before shape evaluation.
 
                     if (isCloth)
                     {
                         float clothMul = Mathf.Max(0f, clothMultiplier);
-                        if (!Mathf.Approximately(clothMul, 1f))
-                            nlv = lv + (nlv - lv) * clothMul;
-                        if (bodyAnchor != null
-                            && bodyAnchor.SurfaceTriangles.Count > 0
-                            && (nlv - lv).sqrMagnitude >= bodyAnchor.MinMovedSq
-                            && TryGetBodySurfaceClothTarget(bodyAnchor, lv, clothMul, fr, out Vector3 surfaceTarget))
-                        {
-                            nlv = surfaceTarget;
-                        }
+                        nlv = lv + (nlv - lv) * clothMul;
+                        // Preserve even tiny raw offsets until the original
+                        // attachment formula has run below.
+                        bodyNew[i] = nlv;
                     }
 
+                    if ((nlv - lv).sqrMagnitude < 1e-14f) continue;
                     if (bodyNew != null) bodyNew[i] = nlv;
-                    else newV[i] = nlv;
+                    else newV[i] = hasMeshConversion ? bodyToClothMatrix.MultiplyPoint3x4(nlv) : nlv;
                     if (moved != null) moved[i] = true;
                     deformed++;
+                }
+
+                if (isCloth)
+                {
+                    deformed = 0;
+                    for (int i = 0; i < n; i++)
+                    {
+                        if (rec.BreastExcluded[i]) continue;
+                        var lv = bodyOrig[i]; var d = lv - fr.Center;
+                        var local = new System.Numerics.Vector3(Vector3.Dot(d, fr.Right), Vector3.Dot(d, fr.Up), Vector3.Dot(d, fr.Fwd));
+                        float attachmentWeight = BellyShape.ClothingFootprint(local, fr.Profile, rate, p);
+                        if (attachmentWeight > 0f && bodyAnchor != null && bodyAnchor.SurfaceTriangles.Count > 0 &&
+                            TryGetBodySurfaceClothTarget(bodyAnchor, lv, Mathf.Max(0f, clothMultiplier), fr, out Vector3 surfaceTarget))
+                            bodyNew[i] = Vector3.Lerp(bodyNew[i], surfaceTarget, attachmentWeight);
+                        moved[i] = (bodyNew[i] - lv).sqrMagnitude >= 1e-14f;
+                        if (moved[i]) deformed++;
+                        else bodyNew[i] = lv;
+                    }
                 }
 
                 int distortionFixed = 0;
@@ -1814,15 +1729,24 @@ namespace SVSPregnancy
                             continue;
                         }
                         newV[i] = hasMeshConversion ? bodyToClothMatrix.MultiplyPoint3x4(bodyNew[i])
-                                : useBodySpace ? FromBodyLocal(sourceTransform, morphTransform, bodyNew[i])
                                 : bodyNew[i];
                     }
                 }
 
+                BreastExclusion.Restore(rec.OrigVerts, newV, rec.BreastExcluded);
                 // Log only on first deformation or deformed-count changes (not every UI tick)
                 if (rec.AppliedSig == 0 || deformed != rec.LastDeformedCount)
                     RuntimeLogInfo($"[VtxMorph] ApplySMR: mesh=\"{mesh.name}\" smr=\"{smr.name}\" cloth={isCloth} {deformed}/{n} verts deformed rate={rate:F3}");
                 rec.LastDeformedCount = deformed;
+                rec.ActualMoved = 0;
+                rec.MaxDisplacement = 0;
+                for (int i = 0; i < newV.Length; i++)
+                {
+                    float distance = (newV[i] - rec.OrigVerts[i]).magnitude;
+                    if (distance > 1e-6f) rec.ActualMoved++;
+                    rec.MaxDisplacement = Mathf.Max(rec.MaxDisplacement, distance);
+                }
+                RuntimeLogInfo($"[VtxMorph] MeshCompute mesh={mesh.name} active={smr.gameObject.activeInHierarchy && smr.enabled} body={BodyMeshSelection.IsBodyPiece(smr)} changed={rec.ActualMoved} maxMeshDelta={rec.MaxDisplacement:F5}");
 
                 if (deformed == 0)
                 {
@@ -1838,11 +1762,8 @@ namespace SVSPregnancy
                         try
                         {
                             mesh.vertices = rec.OrigVerts;
-                            if (!skipNormalRecalc)
-                            {
-                                RecalculateNormalsWelded(mesh, rec.OrigVerts, rec.NormalWeldGroup);
-                                try { mesh.RecalculateTangents(); } catch { }
-                            }
+                            if (rec.OrigNormals?.Length == n) mesh.normals = rec.OrigNormals;
+                            if (rec.OrigTangents?.Length == n) mesh.tangents = rec.OrigTangents;
                             mesh.RecalculateBounds();
                         }
                         catch { }
@@ -1860,7 +1781,7 @@ namespace SVSPregnancy
                 // Skipped for body-layer SMRs (nipple, nail, pubic hair etc.) — those
                 // tiny body-overlay meshes produce corrupted normals when recomputed
                 // and their original artist normals should be preserved as-is.
-                if (!skipNormalRecalc)
+                if (!skipNormalRecalc && !BodyMeshSelection.IsBodyPiece(smr))
                 {
                     RecalculateNormalsWelded(mesh, newV, rec.NormalWeldGroup);
                     try { mesh.RecalculateTangents(); } catch { }
@@ -1880,13 +1801,25 @@ namespace SVSPregnancy
                         // Nipple/areola zone: restore original normals+tangents there too —
                         // belly-edge faces share weld-group reps with nipple verts and
                         // RecalculateNormalsWelded propagates cliff normals into them.
-                        RestoreBreastNT(mesh, n, rec.BreastWeights, rec.SoftBreastGuard, rec.NippleGuard,
+                        RestoreBreastNT(mesh, n, rec.BreastWeights, rec.NippleGuard,
                                         rec.NormalWeldGroup, rec.OrigNormals, rec.OrigTangents);
                     }
                 }
+                RestoreExcludedBreastShading(rec);
                 mesh.RecalculateBounds();
             }
             catch (Exception e) { Log.LogWarning("[VtxMorph] ApplySMR: " + e.Message); }
+        }
+
+        private static void RestoreExcludedBreastShading(MeshRecord rec)
+        {
+            if (rec?.Mesh == null || rec.BreastExcluded == null || !rec.BreastExcluded.Any(x => x)) return;
+            Vector3[] normals = rec.Mesh.normals;
+            Vector4[] tangents = rec.Mesh.tangents;
+            BreastExclusion.Restore(rec.OrigNormals, normals, rec.BreastExcluded);
+            BreastExclusion.Restore(rec.OrigTangents, tangents, rec.BreastExcluded);
+            if (normals.Length > 0) rec.Mesh.normals = normals;
+            if (tangents.Length > 0) rec.Mesh.tangents = tangents;
         }
 
         private static MeshRecord FindRecord(List<MeshRecord> recs, Mesh mesh)
@@ -1897,6 +1830,75 @@ namespace SVSPregnancy
                     return r;
             return null;
         }
+
+        private static void ApplySkinShading(List<MeshRecord> recs,LocalFrame frame,bool log=true)
+        {
+            var skin = new List<MeshRecord>();
+            var parts = new List<SkinSurfaceShading.Part>();
+            foreach (var rec in recs)
+            {
+                var smr = rec.Renderer;
+                if (smr == null || !smr.enabled || !smr.gameObject.activeInHierarchy ||
+                    smr.sharedMesh != rec.Mesh || !BodyMeshSelection.IsBodyPiece(smr) ||
+                    (rec.Mesh.name ?? "").Contains("shadow", StringComparison.OrdinalIgnoreCase) ||
+                    rec.OrigVerts == null || rec.OrigNormals?.Length != rec.OrigVerts.Length) continue;
+                skin.Add(rec);
+                parts.Add(new SkinSurfaceShading.Part
+                {
+                    Original = ToManagedVectors(rec.OrigVerts),
+                    Deformed = ToManagedVectors(rec.LastNewV ?? rec.OrigVerts),
+                    Normals = ToManagedVectors(rec.OrigNormals),
+                    Tangents = rec.OrigTangents == null ? null : Array.ConvertAll(rec.OrigTangents,
+                        t => new System.Numerics.Vector4(t.x, t.y, t.z, t.w)),
+                    Triangles = rec.Mesh.triangles,
+                    DetailProtection = Array.ConvertAll(rec.OrigVerts,v => {
+                        var point=System.Numerics.Vector3.Transform(new System.Numerics.Vector3(v.x,v.y,v.z),rec.ToReference);
+                        var offset=new Vector3(point.X,point.Y,point.Z)-frame.Center;
+                        float x=Vector3.Dot(offset,frame.Right),y=Vector3.Dot(offset,frame.Up),z=Vector3.Dot(offset,frame.Fwd);
+                        var profile=frame.Profile;
+                        if(profile==null || !float.IsFinite(profile.SkinNavelZ) || z<=profile.AxisAt(y))return 0f;
+                        float radius=Math.Clamp(BellyDeformSettings.Vtx.NavelRadius,.015f,.08f)*profile.Span;
+                        float r=MathF.Sqrt(x*x+(y-profile.SkinNavelY)*(y-profile.SkinNavelY)/1.69f)/radius;
+                        return 1-BellyShape.Smooth((r-1)/.5f);
+                    }),
+                    ToReference = rec.ToReference
+                });
+            }
+            if (parts.Count == 0) return;
+            // Compute the complete surface before any writes. Failure stops the preview
+            // through its controller, which returns all leased originals to the game.
+            var result = SkinSurfaceShading.Apply(parts,BellyDeformSettings.Vtx.SkinShadingSmoothing);
+            for (int p = 0; p < skin.Count; p++)
+            {
+                var rec = skin[p];
+                var output = result.Parts[p];
+                var verts = ToUnityVectors(output.Vertices);
+                BreastExclusion.Restore(rec.OrigVerts, verts, rec.BreastExcluded);
+                rec.Mesh.vertices = verts;
+                rec.Mesh.normals = ToUnityVectors(output.Normals);
+                if (output.Tangents?.Length == verts.Length)
+                    rec.Mesh.tangents = Array.ConvertAll(output.Tangents, t => new Vector4(t.X, t.Y, t.Z, t.W));
+                RestoreExcludedBreastShading(rec);
+                rec.Mesh.RecalculateBounds();
+                rec.LastNewV = verts;
+                rec.AppliedSig = Sig(verts);
+                rec.ActualMoved = 0;
+                rec.MaxDisplacement = 0;
+                for (int i = 0; i < verts.Length; i++)
+                {
+                    float distance = (verts[i] - rec.OrigVerts[i]).magnitude;
+                    if (distance > 1e-6f) rec.ActualMoved++;
+                    rec.MaxDisplacement = Mathf.Max(rec.MaxDisplacement, distance);
+                }
+            }
+            if(log) RuntimeLogInfo($"[VtxMorph] SkinShading mode=fixed-corner-transport smoothing={BellyDeformSettings.Vtx.SkinShadingSmoothing:F2} activeParts={skin.Count} weldGroups={result.WeldGroups} crossPartGroups={result.CrossPartGroups} maxSeamCorrection={result.MaxSeamDelta:F6}");
+        }
+
+        private static System.Numerics.Vector3[] ToManagedVectors(Vector3[] vectors)
+            => Array.ConvertAll(vectors, v => new System.Numerics.Vector3(v.x, v.y, v.z));
+
+        private static Vector3[] ToUnityVectors(System.Numerics.Vector3[] vectors)
+            => Array.ConvertAll(vectors, v => new Vector3(v.X, v.Y, v.Z));
 
         private static BodyAnchorContext CreateBodyAnchorContext(LocalFrame fr)
         {
@@ -1954,14 +1956,16 @@ namespace SVSPregnancy
                 Morphed = new Vector3[count],
                 Valid = new bool[count],
                 Affected = new bool[count],
+                BreastExcluded = rec.BreastExcluded,
                 Bases = new BodyAnchorBasis[count],
                 SurfaceTrianglesByVertex = new List<int>[count],
             };
 
+            var meshToReference = MatrixBridge.ToUnity(rec.ToReference);
             for (int i = 0; i < count; i++)
             {
-                anchorMesh.Original[i] = rec.OrigVerts[i];
-                anchorMesh.Morphed[i] = morphedVerts[i];
+                anchorMesh.Original[i] = meshToReference.MultiplyPoint3x4(rec.OrigVerts[i]);
+                anchorMesh.Morphed[i] = meshToReference.MultiplyPoint3x4(morphedVerts[i]);
                 anchorMesh.Valid[i] = true;
             }
 
@@ -2331,8 +2335,14 @@ namespace SVSPregnancy
                 am * hit.Barycentric.x +
                 bm * hit.Barycentric.y +
                 cm * hit.Barycentric.z;
-            float signedDistance = Vector3.Dot(original - hit.Closest, hit.Normal);
-            target = surfaceM + normalM * signedDistance;
+            var offset = original - hit.Closest;
+            var rotated = SurfaceAttachment.RotateOffset(
+                new System.Numerics.Vector3(offset.x, offset.y, offset.z),
+                new System.Numerics.Vector3(hit.Normal.x, hit.Normal.y, hit.Normal.z),
+                new System.Numerics.Vector3(normalM.x, normalM.y, normalM.z));
+            target = surfaceM + new Vector3(rotated.X, rotated.Y, rotated.Z);
+            float distanceFade = 1f - BellyShape.Smooth((Mathf.Sqrt(hit.DistanceSq) / maxDistance - 0.75f) / 0.25f);
+            target = Vector3.Lerp(original, target, distanceFade);
             if (!IsFinite(target))
                 return BodyAnchorMiss(context);
 
@@ -3290,12 +3300,12 @@ namespace SVSPregnancy
 
         // ── Belly mask from bone weights (PP vertex-selection mechanism) ──
 
-        private static bool[] ComputeBellyMask(
+        private static float[] ComputeBellyInfluence(
             Mesh mesh, int vertexCount,
             HashSet<int> bellyBoneSet, HashSet<int> legBoneSet)
         {
             if (bellyBoneSet == null || bellyBoneSet.Count == 0)
-                return null;
+                return new float[vertexCount];
             try
             {
                 var bw = mesh.boneWeights;
@@ -3303,10 +3313,10 @@ namespace SVSPregnancy
                 {
                     Log.LogWarning($"[VtxMorph] BellyMask: boneWeights length mismatch " +
                                    $"({bw?.Length ?? -1} vs {vertexCount})");
-                    return null;
+                    return new float[vertexCount];
                 }
 
-                var mask = new bool[vertexCount];
+                var mask = new float[vertexCount];
                 int pass = 0;
                 for (int i = 0; i < vertexCount; i++)
                 {
@@ -3317,7 +3327,6 @@ namespace SVSPregnancy
                     if (bellyBoneSet.Contains(w.boneIndex2)) bellyW += w.weight2;
                     if (bellyBoneSet.Contains(w.boneIndex3)) bellyW += w.weight3;
 
-                    if (bellyW < 0.02f) continue;  // PP threshold
 
                     if (legBoneSet != null)
                     {
@@ -3325,26 +3334,24 @@ namespace SVSPregnancy
                         if (legBoneSet.Contains(w.boneIndex1)) legW += w.weight1;
                         if (legBoneSet.Contains(w.boneIndex2)) legW += w.weight2;
                         if (legBoneSet.Contains(w.boneIndex3)) legW += w.weight3;
-                        if (legW > bellyW) continue;  // LowerBodyRestoreMask
                     }
 
-                    mask[i] = true;
-                    pass++;
+                    mask[i] = BellyShape.BoneInfluence(bellyW, legW);
+                    if (mask[i] > 0f) pass++;
                 }
 
                 RuntimeLogInfo($"[VtxMorph] BellyMask: {pass}/{vertexCount} vertices pass bone-weight filter");
 
                 if (pass < vertexCount * 0.05f)
                 {
-                    Log.LogWarning($"[VtxMorph] BellyMask: too few vertices ({pass}) — disabling body filter");
-                    return null;
+                    RuntimeLogInfo($"[VtxMorph] BellyMask: sparse body piece ({pass}); keeping the filter");
                 }
                 return mask;
             }
             catch (Exception e)
             {
                 Log.LogWarning("[VtxMorph] BellyMask: " + e.Message);
-                return null;
+                return new float[vertexCount];
             }
         }
 
@@ -3404,65 +3411,6 @@ namespace SVSPregnancy
             }
         }
 
-        /// <summary>
-        /// Extends the breast guard to non-breast verts that share a mesh triangle with a
-        /// breast-weighted vert. This prevents the abrupt step in belly displacement at the
-        /// breast boundary (which was visible as a dark geometric ring in the areola region).
-        ///
-        /// For each triangle: if any vert has breast weight bw > 0, all three verts in that
-        /// triangle receive a spillover guard = bw * SpilloverFactor, clamped to their existing
-        /// soft guard value (so true breast verts keep their original weight as the dominant value).
-        ///
-        /// One pass covers the immediate 1-ring neighbors of each breast vert.
-        /// </summary>
-        private static float[] ComputeSoftBreastGuard(Mesh mesh, int n, float[] breastWeights)
-        {
-            if (breastWeights == null) return null;
-            var soft = (float[])breastWeights.Clone();
-            try
-            {
-                // Multi-ring iterative propagation for normal-restoration zone only.
-                // SoftBreastGuard is NOT used in the deformation geometry guard —
-                // it is used exclusively by RestoreBreastNT to identify which
-                // non-breast boundary verts had their normals contaminated by the
-                // cliff-face RecalcN at the breast/belly boundary and need origN restored.
-                //
-                // 2 passes cover ~2 rings around the breast:
-                //   ring 0 (breast):  soft = breastWeight        (e.g. 0.4)
-                //   ring 1:           soft = breastWeight × 0.5  (e.g. 0.2) — passes "> 0" threshold
-                //   ring 2:           soft = breastWeight × 0.25 (e.g. 0.1) — passes "> 0" threshold
-                //
-                // These 1–2 rings are the verts directly adjacent to breast triangles whose
-                // RecalcN normals pick up the breast/belly transition slope.  Restoring their
-                // origN eliminates the visible areola shadow ring.
-                // Verts used as source each pass are `soft` (not `breastWeights`) so the
-                // already-propagated ring-1 values seed ring-2 propagation in the next pass.
-                const float SpilloverFactor = 0.5f;
-                const int   MaxPasses       = 2;
-                int[] tris = mesh.triangles;
-                for (int pass = 0; pass < MaxPasses; pass++)
-                {
-                    bool anyChange = false;
-                    for (int t = 0; t < tris.Length; t += 3)
-                    {
-                        int a = tris[t], b = tris[t + 1], c = tris[t + 2];
-                        // Read from soft (updated values) so prior-ring spill seeds next ring.
-                        float maxSoft = soft[a];
-                        if (soft[b] > maxSoft) maxSoft = soft[b];
-                        if (soft[c] > maxSoft) maxSoft = soft[c];
-                        if (maxSoft <= 0f) continue;
-                        float spill = maxSoft * SpilloverFactor;
-                        if (spill > soft[a]) { soft[a] = spill; anyChange = true; }
-                        if (spill > soft[b]) { soft[b] = spill; anyChange = true; }
-                        if (spill > soft[c]) { soft[c] = spill; anyChange = true; }
-                    }
-                    if (!anyChange) break;
-                }
-            }
-            catch { }
-            return soft;
-        }
-
         private static bool IsBreastBoneName(string name)
         {
             if (string.IsNullOrEmpty(name)) return false;
@@ -3477,6 +3425,7 @@ namespace SVSPregnancy
 
         private static void UndoRecord(MeshRecord rec)
         {
+            if (rec != null) { rec.Virtual?.Restore(); rec.Virtual=null; }
             if (rec?.Mesh == null || rec.OrigVerts == null || rec.AppliedSig == 0) return;
             try
             {
@@ -3496,7 +3445,7 @@ namespace SVSPregnancy
                     RecalculateNormalsWelded(rec.Mesh, rec.OrigVerts, rec.NormalWeldGroup);
                     // Restore breast area even in fallback path
                     RestoreBreastNT(rec.Mesh, n,
-                                    rec.BreastWeights, rec.SoftBreastGuard, rec.NippleGuard,
+                                    rec.BreastWeights, rec.NippleGuard,
                                     rec.NormalWeldGroup,
                                     rec.OrigNormals, rec.OrigTangents);
                 }
@@ -3563,212 +3512,60 @@ namespace SVSPregnancy
         // by position (1 mm precision) so that seam duplicates share the same
         // averaged normal, eliminating the artifact.
 
-        // Computes the rotation matrix that maps cloth mesh local space → body mesh local space.
-        // Full-rig clothes (same bone count as body) can be authored in a rotated coordinate
-        // system. This method uses shared-bone bindpose origins to derive the rotation via
-        // Gram-Schmidt orthonormalisation of three non-collinear bone positions.
+        // Exact same-rig bind matrices first; native AL clothing can instead fit
+        // anatomically corresponding origins with rotation, translation and scale.
         private static bool TryComputeClothBodyMatrix(
             SkinnedMeshRenderer clothSmr, SkinnedMeshRenderer bodySmr,
             out Matrix4x4 clothToBody, out Matrix4x4 bodyToCloth,
-            string debugName = null)
+            string debugName = null, bool allowAliases = false)
         {
-            clothToBody = Matrix4x4.identity;
-            bodyToCloth = Matrix4x4.identity;
+            clothToBody = bodyToCloth = Matrix4x4.identity;
             try
             {
-                Mesh clothMesh = clothSmr?.sharedMesh;
-                Mesh bodyMesh  = bodySmr?.sharedMesh;
-                Transform[] clothBones = clothSmr?.bones;
-                Transform[] bodyBones  = bodySmr?.bones;
-                Matrix4x4[] clothBp = clothMesh?.bindposes;
-                Matrix4x4[] bodyBp  = bodyMesh?.bindposes;
-                if (clothBones == null || bodyBones == null || clothBp == null || bodyBp == null)
+                Transform[] sourceBones = clothSmr.bones;
+                Transform[] targetBones = bodySmr.bones;
+                Matrix4x4[] sourcePoses = clothSmr.sharedMesh.bindposes;
+                Matrix4x4[] targetPoses = bodySmr.sharedMesh.bindposes;
+                if (sourceBones == null || targetBones == null || sourcePoses == null || targetPoses == null ||
+                    sourceBones.Length != sourcePoses.Length || targetBones.Length != targetPoses.Length) return false;
+                var sourceNames = new string[sourceBones.Length];
+                var targetNames = new string[targetBones.Length];
+                var sourceMatrices = new System.Numerics.Matrix4x4[sourceBones.Length];
+                var targetMatrices = new System.Numerics.Matrix4x4[targetBones.Length];
+                for (int i = 0; i < sourceBones.Length; i++)
                 {
-                    RuntimeLogInfo($"[VtxMorph] TryComputeMatrix \"{debugName}\": null arrays clothBones={clothBones==null} bodyBones={bodyBones==null} clothBp={clothBp==null} bodyBp={bodyBp==null}");
-                    return false;
+                    sourceNames[i] = sourceBones[i]?.name;
+                    sourceMatrices[i] = MatrixBridge.ToManaged(sourcePoses[i]);
                 }
-                if (clothBones.Length != clothBp.Length || bodyBones.Length != bodyBp.Length)
+                for (int i = 0; i < targetBones.Length; i++)
                 {
-                    RuntimeLogInfo($"[VtxMorph] TryComputeMatrix \"{debugName}\": length mismatch clothBones={clothBones.Length} clothBp={clothBp.Length} bodyBones={bodyBones.Length} bodyBp={bodyBp.Length}");
-                    return false;
+                    targetNames[i] = targetBones[i]?.name;
+                    targetMatrices[i] = MatrixBridge.ToManaged(targetPoses[i]);
                 }
-
-                // Map body bone name → index in body bones array
-                // (cloth has a separate bone hierarchy with different Transform objects
-                //  but the same bone names as the body — match by name, not reference)
-                var bodyMap = new Dictionary<string, int>(bodyBones.Length);
-                for (int i = 0; i < bodyBones.Length; i++)
-                    if (bodyBones[i] != null && bodyBones[i].name != null)
-                        bodyMap[bodyBones[i].name] = i;
-
-                RuntimeLogInfo($"[VtxMorph] TryComputeMatrix \"{debugName}\": clothBones={clothBones.Length} bodyBones={bodyBones.Length} bodyMap={bodyMap.Count}");
-
-                // Collect bone origins (bindpose.inverse.GetColumn(3) = bone origin in mesh space)
-                var clothPts = new List<Vector3>();
-                var bodyPts  = new List<Vector3>();
-                int noMatch = 0;
-                for (int ci = 0; ci < clothBones.Length; ci++)
+                bool valid = RestSpaceMapping.TryCreate(sourceNames, sourceMatrices, targetNames, targetMatrices,
+                    out var map, out var inverse, out int shared, out float maxError);
+                string mode = "exact-bind-matrix";
+                if (!valid && allowAliases)
                 {
-                    if (clothBones[ci] == null) continue;
-                    string cName = clothBones[ci].name;
-                    if (string.IsNullOrEmpty(cName) || !bodyMap.TryGetValue(cName, out int bi)) { noMatch++; continue; }
-                    Matrix4x4 cInv = clothBp[ci].inverse;
-                    Matrix4x4 bInv = bodyBp[bi].inverse;
-                    clothPts.Add(new Vector3(cInv.m03, cInv.m13, cInv.m23));
-                    bodyPts.Add (new Vector3(bInv.m03, bInv.m13, bInv.m23));
-                    if (clothPts.Count >= 30) break;
+                    mode = "anatomical-origin-fit";
+                    valid = RestSpaceMapping.TryCreateAliased(sourceNames, sourceMatrices, targetNames, targetMatrices,
+                        out map, out inverse, out shared, out maxError);
                 }
-
-                // Log first few sample names to verify matching
-                string sampleNames = "";
-                for (int ci = 0, shown = 0; ci < clothBones.Length && shown < 5; ci++)
-                {
-                    if (clothBones[ci] == null) continue;
-                    string cName = clothBones[ci].name;
-                    bool hit = !string.IsNullOrEmpty(cName) && bodyMap.ContainsKey(cName);
-                    sampleNames += $" [{cName}={hit}]";
-                    shown++;
-                }
-                RuntimeLogInfo($"[VtxMorph] TryComputeMatrix \"{debugName}\": matched={clothPts.Count} noMatch={noMatch} samples:{sampleNames}");
-
-                if (clothPts.Count >= 1)
-                {
-                    RuntimeLogInfo($"[VtxMorph] TryComputeMatrix \"{debugName}\": clothPts[0]={clothPts[0]:F3} bodyPts[0]={bodyPts[0]:F3}");
-                    if (clothPts.Count >= 2)
-                        RuntimeLogInfo($"[VtxMorph] TryComputeMatrix \"{debugName}\": clothPts[1]={clothPts[1]:F3} bodyPts[1]={bodyPts[1]:F3}");
-                    if (clothPts.Count >= 3)
-                        RuntimeLogInfo($"[VtxMorph] TryComputeMatrix \"{debugName}\": clothPts[2]={clothPts[2]:F3} bodyPts[2]={bodyPts[2]:F3}");
-                }
-
-                if (clothPts.Count < 3)
-                {
-                    RuntimeLogInfo($"[VtxMorph] TryComputeMatrix \"{debugName}\": not enough matched points ({clothPts.Count}<3) — return false");
-                    return false;
-                }
-
-                // Find three non-collinear points using cloth positions
-                int i0 = 0, i1 = -1, i2 = -1;
-                Vector3 p0c = clothPts[0];
-                float best1 = 0f;
-                for (int k = 1; k < clothPts.Count; k++)
-                {
-                    float d = (clothPts[k] - p0c).sqrMagnitude;
-                    if (d > best1) { best1 = d; i1 = k; }
-                }
-                if (i1 < 0 || best1 < 1e-6f)
-                {
-                    RuntimeLogInfo($"[VtxMorph] TryComputeMatrix \"{debugName}\": all cloth points identical best1={best1} — return false");
-                    return false;
-                }
-
-                Vector3 ax = (clothPts[i1] - p0c).normalized;
-                float best2 = 0f;
-                for (int k = 0; k < clothPts.Count; k++)
-                {
-                    if (k == i0 || k == i1) continue;
-                    float d = Vector3.Cross(ax, clothPts[k] - p0c).sqrMagnitude;
-                    if (d > best2) { best2 = d; i2 = k; }
-                }
-                if (i2 < 0 || best2 < 1e-4f)
-                {
-                    RuntimeLogInfo($"[VtxMorph] TryComputeMatrix \"{debugName}\": cloth points collinear best2={best2} — return false");
-                    return false;
-                }
-
-                // Build orthonormal frames via Gram-Schmidt
-                Vector3 cX = (clothPts[i1] - clothPts[i0]).normalized;
-                Vector3 cZ = Vector3.Cross(cX, clothPts[i2] - clothPts[i0]).normalized;
-                Vector3 cY = Vector3.Cross(cZ, cX);
-
-                Vector3 bX = (bodyPts[i1] - bodyPts[i0]).normalized;
-                Vector3 bZ = Vector3.Cross(bX, bodyPts[i2] - bodyPts[i0]).normalized;
-                Vector3 bY = Vector3.Cross(bZ, bX);
-
-                RuntimeLogInfo($"[VtxMorph] TryComputeMatrix \"{debugName}\": cX={cX:F3} cY={cY:F3} cZ={cZ:F3}");
-                RuntimeLogInfo($"[VtxMorph] TryComputeMatrix \"{debugName}\": bX={bX:F3} bY={bY:F3} bZ={bZ:F3}");
-
-                // clothToBody = Mb * Mc^T  (Mc cols = cloth axes, Mb cols = body axes)
-                var Mc = Matrix4x4.identity;
-                Mc.SetColumn(0, new Vector4(cX.x, cX.y, cX.z, 0f));
-                Mc.SetColumn(1, new Vector4(cY.x, cY.y, cY.z, 0f));
-                Mc.SetColumn(2, new Vector4(cZ.x, cZ.y, cZ.z, 0f));
-
-                var Mb = Matrix4x4.identity;
-                Mb.SetColumn(0, new Vector4(bX.x, bX.y, bX.z, 0f));
-                Mb.SetColumn(1, new Vector4(bY.x, bY.y, bY.z, 0f));
-                Mb.SetColumn(2, new Vector4(bZ.x, bZ.y, bZ.z, 0f));
-
-                clothToBody = Mb * Mc.transpose;
-                bodyToCloth = clothToBody.transpose; // R^{-1} = R^T for a rotation matrix
-
-                // ── Z-up vertex correction ────────────────────────────────────────
-                // Some cloth meshes (e.g. denim00) were baked by ClothReadableReplace
-                // at Z-up prefab orientation, so raw vertices sit at Z≈1 rather than
-                // Y≈1.  Their bindposes are unchanged (Y-up from the original asset),
-                // so the Gram-Schmidt comparison above sees identical cloth/body bone
-                // positions and returns the identity.  Detect this by comparing the
-                // actual raw-vertex centroid against the bindpose-derived centroid: if
-                // the vertex cloud is clearly Z-up while the bone positions are Y-up,
-                // the computed rotation is wrong and we override it here.
-                {
-                    // Centroid of bindpose-derived cloth bone positions (Y-up if bindposes
-                    // were not updated after BakeMesh).
-                    Vector3 bpCenter = Vector3.zero;
-                    foreach (var p in clothPts) bpCenter += p;
-                    bpCenter /= clothPts.Count;
-
-                    // Centroid of the actual raw cloth vertices (sampled).
-                    var rawVerts = clothSmr.sharedMesh?.vertices;
-                    if (rawVerts != null && rawVerts.Length > 0)
-                    {
-                        Vector3 vtxCenter = Vector3.zero;
-                        int sampleN = Mathf.Min(200, rawVerts.Length);
-                        for (int si = 0; si < sampleN; si++) vtxCenter += rawVerts[si];
-                        vtxCenter /= sampleN;
-
-                        RuntimeLogInfo($"[VtxMorph] TryComputeMatrix \"{debugName}\": bpCenter={bpCenter:F3} vtxCenter={vtxCenter:F3}");
-
-                        // vtxCenter.z >> vtxCenter.y  AND  bpCenter.y >> bpCenter.z
-                        // → bindposes are Y-up, raw vertices are +Z-up.
-                        // Needed rotation: (X,Y,Z) → (X, Z, -Y)  [rows: X→X, Z→Y, -Y→Z]
-                        bool vtxZup  = vtxCenter.z >  0.3f && vtxCenter.z >  Mathf.Abs(vtxCenter.y) * 2f;
-                        bool bpYup   = bpCenter.y  >  0.3f && bpCenter.y  >  Mathf.Abs(bpCenter.z)  * 2f;
-
-                        if (vtxZup && bpYup)
-                        {
-                            // Unity Matrix4x4(col0,col1,col2,col3) is column-major:
-                            //   col0=(m00,m10,m20,m30)  col1=(m01,m11,m21,m31)  col2=(m02,m12,m22,m32)
-                            // We want (X,Y,Z)→(X,Z,-Y):
-                            //   x'= m00*x+m01*y+m02*z = x  → m00=1, m01=0, m02=0
-                            //   y'= m10*x+m11*y+m12*z = z  → m10=0, m11=0, m12=1
-                            //   z'= m20*x+m21*y+m22*z =-y  → m20=0, m21=-1,m22=0
-                            // So: col0=(1,0,0,0) col1=(0,0,-1,0) col2=(0,1,0,0) col3=(0,0,0,1)
-                            clothToBody = new Matrix4x4(
-                                new Vector4(1,  0,  0, 0),   // col0
-                                new Vector4(0,  0, -1, 0),   // col1: m21=-1 → z'=-y
-                                new Vector4(0,  1,  0, 0),   // col2: m12=+1 → y'=z
-                                new Vector4(0,  0,  0, 1));  // col3
-                            bodyToCloth = clothToBody.transpose;
-                            RuntimeLogInfo($"[VtxMorph] TryComputeMatrix \"{debugName}\": OVERRIDE → Z-up vertex correction applied (X,Y,Z)→(X,Z,-Y)");
-                        }
-                    }
-                }
-
-                RuntimeLogInfo($"[VtxMorph] TryComputeMatrix \"{debugName}\": clothToBody row0=({clothToBody.m00:F3},{clothToBody.m01:F3},{clothToBody.m02:F3}) row1=({clothToBody.m10:F3},{clothToBody.m11:F3},{clothToBody.m12:F3}) row2=({clothToBody.m20:F3},{clothToBody.m21:F3},{clothToBody.m22:F3})");
+                if (debugName != null)
+                    RuntimeLogInfo($"[VtxMorph] RestSpace {debugName}: valid={valid} sharedBones={shared} maxError={maxError:F5} mode={mode} scale={new System.Numerics.Vector3(map.M11, map.M12, map.M13).Length():F5}");
+                if (!valid && debugName != null)
+                    RuntimeLogInfo($"[VtxMorph] RestSpaceNames {debugName}: source=[{string.Join(",", sourceNames)}] target=[{string.Join(",", targetNames)}]");
+                if (!valid) return false;
+                clothToBody = MatrixBridge.ToUnity(map);
+                bodyToCloth = MatrixBridge.ToUnity(inverse);
                 return true;
             }
             catch (Exception ex)
             {
-                RuntimeLogInfo($"[VtxMorph] TryComputeMatrix \"{debugName}\": EXCEPTION {ex.Message}");
+                Log.LogWarning("[VtxMorph] RestSpace " + debugName + ": " + ex);
                 return false;
             }
         }
-
-        /// <summary>
-        /// For each overlay vertex, find the index of the nearest body vertex in bind-pose space.
-        /// Result is cached in BodyLayerEntry.NearestBodyVertIdx and built once per character.
-        /// O(overlayN × bodyN) — acceptable for small overlays (mnpa=28, mnpb=76 verts).
-        /// </summary>
         private static int[] BuildNearestBodyVertCache(Vector3[] overlayVerts, Vector3[] bodyVerts)
         {
             int on = overlayVerts.Length;
@@ -3796,8 +3593,6 @@ namespace SVSPregnancy
         /// zones into one array.
         ///
         /// Value 1.0 = body vert directly under the overlay.
-        /// Value 0.5 = 1-ring triangle-neighbour of a seeded vert (catches verts sharing
-        ///             the nipple-transition triangle whose RecalcN picks up the breast slope).
         /// Values are clamped to the existing guard so multiple passes only expand the zone.
         /// </summary>
         private static float[] MergeNippleGuard(Mesh bodyMesh, int n, int[] overlayToBodyIdx,
@@ -3807,22 +3602,6 @@ namespace SVSPregnancy
             // Seed: body verts directly under overlay verts → value 1.0
             foreach (int bi in overlayToBodyIdx)
                 if (bi >= 0 && bi < n && guard[bi] < 1.0f) guard[bi] = 1.0f;
-            // 1-ring propagation: any triangle touching a seeded vert gets 0.5
-            try
-            {
-                int[] tris = bodyMesh.triangles;
-                for (int t = 0; t < tris.Length; t += 3)
-                {
-                    int a = tris[t], b = tris[t + 1], c = tris[t + 2];
-                    float mx = guard[a]; if (guard[b] > mx) mx = guard[b]; if (guard[c] > mx) mx = guard[c];
-                    if (mx <= 0f) continue;
-                    float spill = mx * 0.5f;
-                    if (spill > guard[a]) guard[a] = spill;
-                    if (spill > guard[b]) guard[b] = spill;
-                    if (spill > guard[c]) guard[c] = spill;
-                }
-            }
-            catch { }
             return guard;
         }
 
@@ -3987,10 +3766,10 @@ namespace SVSPregnancy
 
         private static void RestoreBreastNT(
             Mesh mesh, int n,
-            float[] breastWeights, float[] softGuard, float[] nippleGuard, int[] weldGroup,
+            float[] breastWeights, float[] nippleGuard, int[] weldGroup,
             Vector3[] origNormals, Vector4[] origTangents)
         {
-            if (breastWeights == null) return;
+            if (!BellyDeformSettings.Vtx.BreastExclusionEnabled || breastWeights == null) return;
             bool doN = origNormals  != null && origNormals.Length  == n;
             bool doT = origTangents != null && origTangents.Length == n;
             if (!doN && !doT) return;
@@ -4001,7 +3780,7 @@ namespace SVSPregnancy
                 if (hasNG)
                 {
                     // Narrow mode: NippleGuard is built from mnpa/mnpb overlay positions
-                    // (+ 1-ring propagation), so it covers only the nipple/areola zone.
+                    // without neighbor expansion, covering only the nipple/areola zone.
                     // Restoring origN only here fixes the areola shadow without touching
                     // the rest of the breast boundary — preventing belly artifacts and
                     // the front/back torso seam that appear in broad-restore mode.
@@ -4020,10 +3799,9 @@ namespace SVSPregnancy
                 else
                 {
                     // Broad mode fallback (no overlay data): restore all breast-weighted verts
-                    // and their SoftBreastGuard boundary ring.  Used when mnpa/mnpb overlays
+                    // and UV duplicates. Used when mnpa/mnpb overlays
                     // haven't been processed yet for this record.
                     bool hasWG = weldGroup != null && weldGroup.Length == n;
-                    bool hasSG = softGuard != null && softGuard.Length == n;
                     var breastReps = hasWG ? new HashSet<int>() : null;
                     if (hasWG)
                         for (int i = 0; i < n; i++)
@@ -4036,10 +3814,9 @@ namespace SVSPregnancy
                     for (int i = 0; i < n; i++)
                     {
                         bool isBreast       = breastWeights[i] > 0f;
-                        bool isBoundary     = !isBreast && hasSG && softGuard[i] > 0f;
-                        bool isContaminated = !isBreast && !isBoundary && hasWG
+                        bool isContaminated = !isBreast && hasWG
                                              && breastReps.Contains(weldGroup[i]);
-                        if (!isBreast && !isBoundary && !isContaminated) continue;
+                        if (!isBreast && !isContaminated) continue;
                         if (doN && normals  != null) { normals[i]  = origNormals[i];  anyN = true; }
                         if (doT && tangents != null) { tangents[i] = origTangents[i]; anyT = true; }
                     }
@@ -4065,3 +3842,7 @@ namespace SVSPregnancy
         }
     }
 }
+
+
+
+

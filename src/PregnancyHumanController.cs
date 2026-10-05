@@ -1,4 +1,4 @@
-﻿using BepInEx;
+using BepInEx;
 using BepInEx.Configuration;
 using BepInEx.Unity.IL2CPP;
 using HarmonyLib;
@@ -145,15 +145,14 @@ namespace SVSPregnancy
 
         public void ModifyBelly()
         {
+            if (BellyVertexMorph.ForceApplyEnabled &&
+                (BellyVertexMorph.ForceApplyCharaId < 0 || BellyVertexMorph.ForceApplyCharaId == _charaId))
+            {
+                BellyVertexMorph.Apply(_human, _charaId >= 0 ? _charaId : 0, BellyVertexMorph.ForceApplyRate);
+                return;
+            }
             if (_charactrl == null)
             {
-                // No world controller — character creation / studio.
-                // Only deform when the Debug UI force-apply panel is active.
-                if (BellyVertexMorph.ForceApplyEnabled)
-                {
-                    int id = _charaId >= 0 ? _charaId : 0;
-                    BellyVertexMorph.Apply(_human, id, BellyVertexMorph.ForceApplyRate);
-                }
                 return;
             }
 
@@ -187,7 +186,7 @@ namespace SVSPregnancy
             return _human.sex;
         }
 
-        protected void LateUpdate()
+        public void AfterNativeUpdate()
         {
             if (!created || !Enable || !PregnancyPlugin.ConfigEnable.Value || !_inited)
                 return;

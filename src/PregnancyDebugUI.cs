@@ -1,4 +1,5 @@
-﻿using Il2CppInterop.Runtime;
+using Il2CppInterop.Runtime;
+using Il2CppInterop.Runtime.Attributes;
 using System;
 using System.Globalization;
 using System.Linq;
@@ -11,7 +12,7 @@ namespace SVSPregnancy
         public PregnancyDebugUI(IntPtr ptr) : base(ptr) { }
 
         private bool  _show       = false;
-        private Rect  _windowRect = new Rect(20, 80, 540, 560);
+        private Rect  _windowRect = new Rect(20, 80, 560, 610);
         private Vector2 _charScroll = Vector2.zero;
         private int   _selectedCharaId = -1;
 
@@ -20,22 +21,8 @@ namespace SVSPregnancy
         private Vector2  _vtxScroll         = Vector2.zero;
         private string   _bellyMsg          = "";
 
-        // Text-field buffers — 32 entries, one per vtx param.
-        // Indices:
-        //  0  SpineLerpT    1  InflationSize  2  MoveY       3  MoveZ
-        //  4  RadiusSide    5  RadiusFront    6  RadiusBack   7  RadiusUp    8  RadiusDown
-        //  9  StretchX      10 StretchY       11 StretchZ
-        // 12  ShiftY        13 ShiftZ         14 Drop
-        // 15  TaperY        16 TaperZ         17 Roundness   18 EdgeSmooth
-        // 19  FatFold       20 FatFoldHeight  21 FatFoldGap
-        // 22  BackLimit     23 BackStrength   24 BackSmooth
-        // 25  BreastGuard
-        // 26  ClothTopMult  27 ClothBotMult  28 ClothBraMult
-        // 29  ClothShortsMult  30 ClothPanstMult  31 ClothOtherMult
-        // 32  ClothDistortThreshold  33 ClothDistortNeighborDiff
-        private string[] _vtxBuf      = null;
-        private string   _startDayBuf = "40";
-        private bool     _vtxBufInited = false;
+        private float _vtxContentHeight = 2400f;
+        private string _startDayBuf = "40";
 
         // Lazily created 1×1 white texture for the progress bar fill
         private static Texture2D _whiteTex;
@@ -69,9 +56,6 @@ namespace SVSPregnancy
                 "SVSPregnancy Debug");
         }
 
-        // ── rate slider buffer for the force-apply panel ──────────────────
-        private string _forceRateBuf = "1.00";
-
         private void DrawWindow(int id)
         {
             var worldCtrl = PregnancyPlugin._worldController;
@@ -99,7 +83,15 @@ namespace SVSPregnancy
                 bool   selected = ctrl._charaId == _selectedCharaId;
                 var    style    = selected ? GUI.skin.box : GUI.skin.button;
                 if (GUILayout.Button(label, style))
+                {
+                    if (_selectedCharaId != ctrl._charaId && BellyVertexMorph.ForceApplyEnabled)
+                    {
+                        BellyVertexMorph.ForceApplyEnabled = false;
+                        BellyVertexMorph.ForgetAll();
+                        ApplyBellyAll();
+                    }
                     _selectedCharaId = ctrl._charaId;
+                }
             }
             if (females.Count == 0)
                 GUILayout.Label("(none)");
@@ -149,7 +141,6 @@ namespace SVSPregnancy
             if (GUILayout.Button(toggleLabel))
             {
                 _showBellySettings = !_showBellySettings;
-                if (_showBellySettings) EnsureVtxBuf();
             }
 
             if (_showBellySettings)
@@ -164,75 +155,8 @@ namespace SVSPregnancy
         // ─────────────────────────────────────────────────────────────────
         private void DrawForceApplyPanel()
         {
-            GUILayout.Label("World controller not ready  (character creation / studio mode)");
-            GUILayout.Space(8);
-            GUILayout.Label("── Debug Force Apply ──────────────────────────");
-            GUILayout.Space(4);
-
-            // Rate slider + text field
-            GUILayout.BeginHorizontal();
-            GUILayout.Label("Rate:", GUILayout.Width(40));
-            string rateNext = GUILayout.TextField(_forceRateBuf, GUILayout.Width(50));
-            if (rateNext != _forceRateBuf) _forceRateBuf = rateNext;
-            if (!float.TryParse(_forceRateBuf,
-                    System.Globalization.NumberStyles.Float,
-                    System.Globalization.CultureInfo.InvariantCulture,
-                    out float parsedRate))
-                parsedRate = BellyVertexMorph.ForceApplyRate;
-            parsedRate = Mathf.Clamp01(parsedRate);
-
-            float slid = GUILayout.HorizontalSlider(parsedRate, 0f, 1f, GUILayout.Width(200));
-            if (!Mathf.Approximately(slid, parsedRate))
-            {
-                parsedRate = slid;
-                _forceRateBuf = parsedRate.ToString("F2",
-                    System.Globalization.CultureInfo.InvariantCulture);
-            }
-            BellyVertexMorph.ForceApplyRate = parsedRate;
-            GUILayout.Label(parsedRate.ToString("F2"), GUILayout.Width(35));
-            GUILayout.EndHorizontal();
-
-            GUILayout.Space(6);
-
-            // Toggle + Reset buttons
-            GUILayout.BeginHorizontal();
-            string toggleLabel = BellyVertexMorph.ForceApplyEnabled
-                ? "■ Force Apply  ON  (click to turn off)"
-                : "▶ Force Apply  OFF  (click to turn on)";
-            if (GUILayout.Button(toggleLabel))
-            {
-                BellyVertexMorph.ForceApplyEnabled = !BellyVertexMorph.ForceApplyEnabled;
-                if (BellyVertexMorph.ForceApplyEnabled)
-                {
-                    BellyVertexMorph.Paused = false;
-                    BellyVertexMorph.InvalidateAll();
-                }
-            }
-            if (GUILayout.Button("Reset Deform"))
-            {
-                BellyVertexMorph.ForceApplyEnabled = false;
-                BellyVertexMorph.ForgetAll();
-            }
-            GUILayout.EndHorizontal();
-
-            GUILayout.Space(8);
-            GUILayout.Label("How to use:");
-            GUILayout.Label("1. Load a character with clothing in character creation.");
-            GUILayout.Label("2. Set Rate (1.0 = full pregnancy).");
-            GUILayout.Label("3. Click 'Force Apply ON' — belly + cloth deform immediately.");
-            GUILayout.Label("4. Check log for [VtxMorph] ClothCache / TryComputeMatrix lines.");
-            GUILayout.Label("5. Click 'Reset Deform' to undo.");
-
-            // Also show belly-settings panel in this mode so params can be tuned
-            GUILayout.Space(6);
-            var toggleBelly = _showBellySettings ? "▼ Belly Deform Settings" : "▶ Belly Deform Settings";
-            if (GUILayout.Button(toggleBelly))
-            {
-                _showBellySettings = !_showBellySettings;
-                if (_showBellySettings) EnsureVtxBuf();
-            }
-            if (_showBellySettings)
-                DrawVtxSettings();
+            GUILayout.Label("Manual shape preview does not change pregnancy or saved state.");
+            DrawVtxSettings();
         }
 
         // ─────────────────────────────────────────────────────────────────
@@ -308,250 +232,149 @@ namespace SVSPregnancy
         // Vertex morph settings panel — text fields + sliders
         // ─────────────────────────────────────────────────────────────────
 
-        /// <summary>Populate _vtxBuf from current BellyDeformSettings (once).</summary>
-        private void EnsureVtxBuf()
-        {
-            if (_vtxBufInited) return;
-            SyncBufFromSettings();
-            _vtxBufInited = true;
-        }
-
-        /// <summary>Copy current settings into the string buffers.</summary>
-        private void SyncBufFromSettings()
-        {
-            var s = BellyDeformSettings.Vtx;
-            _startDayBuf = BellyDeformSettings.StartDay.ToString();
-            _vtxBuf = new string[34];
-            _vtxBuf[0]  = Fmt(s.SpineLerpT);    _vtxBuf[1]  = Fmt(s.InflationSize);
-            _vtxBuf[2]  = Fmt(s.MoveY);          _vtxBuf[3]  = Fmt(s.MoveZ);
-            _vtxBuf[4]  = Fmt(s.RadiusSide);     _vtxBuf[5]  = Fmt(s.RadiusFront);
-            _vtxBuf[6]  = Fmt(s.RadiusBack);     _vtxBuf[7]  = Fmt(s.RadiusUp);
-            _vtxBuf[8]  = Fmt(s.RadiusDown);
-            _vtxBuf[9]  = Fmt(s.StretchX);       _vtxBuf[10] = Fmt(s.StretchY);
-            _vtxBuf[11] = Fmt(s.StretchZ);
-            _vtxBuf[12] = Fmt(s.ShiftY);         _vtxBuf[13] = Fmt(s.ShiftZ);
-            _vtxBuf[14] = Fmt(s.Drop);
-            _vtxBuf[15] = Fmt(s.TaperY);         _vtxBuf[16] = Fmt(s.TaperZ);
-            _vtxBuf[17] = Fmt(s.Roundness);      _vtxBuf[18] = Fmt(s.EdgeSmooth);
-            _vtxBuf[19] = Fmt(s.FatFold);        _vtxBuf[20] = Fmt(s.FatFoldHeight);
-            _vtxBuf[21] = Fmt(s.FatFoldGap);
-            _vtxBuf[22] = Fmt(s.BackLimit);      _vtxBuf[23] = Fmt(s.BackStrength);
-            _vtxBuf[24] = Fmt(s.BackSmooth);
-            _vtxBuf[25] = Fmt(s.BreastGuardStrength);
-            _vtxBuf[26] = Fmt(s.ClothTopMult);
-            _vtxBuf[27] = Fmt(s.ClothBotMult);
-            _vtxBuf[28] = Fmt(s.ClothBraMult);
-            _vtxBuf[29] = Fmt(s.ClothShortsMult);
-            _vtxBuf[30] = Fmt(s.ClothPanstMult);
-            _vtxBuf[31] = Fmt(s.ClothOtherMult);
-            _vtxBuf[32] = Fmt(s.ClothDistortThreshold);
-            _vtxBuf[33] = Fmt(s.ClothDistortNeighborDiff);
-        }
-
-        /// <summary>Parse the string buffers back into a VtxSettings object.</summary>
-        private VtxSettings BuildVtxFromBuf() => new VtxSettings
-        {
-            SpineLerpT    = ParseF(_vtxBuf[0],   0.500f),
-            InflationSize = ParseF(_vtxBuf[1],   4.000f),
-            MoveY         = ParseF(_vtxBuf[2],  -0.656f),
-            MoveZ         = ParseF(_vtxBuf[3],  -1.125f),
-            RadiusSide    = ParseF(_vtxBuf[4],   2.025f),
-            RadiusFront   = ParseF(_vtxBuf[5],   2.311f),
-            RadiusBack    = ParseF(_vtxBuf[6],   0.000f),
-            RadiusUp      = ParseF(_vtxBuf[7],   2.704f),
-            RadiusDown    = ParseF(_vtxBuf[8],   1.870f),
-            StretchX      = ParseF(_vtxBuf[9],   0.000f),
-            StretchY      = ParseF(_vtxBuf[10],  0.000f),
-            StretchZ      = ParseF(_vtxBuf[11],  0.125f),
-            ShiftY        = ParseF(_vtxBuf[12],  0.000f),
-            ShiftZ        = ParseF(_vtxBuf[13],  0.000f),
-            Drop          = ParseF(_vtxBuf[14], -0.500f),
-            TaperY        = ParseF(_vtxBuf[15],  0.000f),
-            TaperZ        = ParseF(_vtxBuf[16],  0.266f),
-            Roundness     = ParseF(_vtxBuf[17],  0.219f),
-            EdgeSmooth    = ParseF(_vtxBuf[18],  1.000f),
-            FatFold       = ParseF(_vtxBuf[19],  0.000f),
-            FatFoldHeight = ParseF(_vtxBuf[20],  0.000f),
-            FatFoldGap    = ParseF(_vtxBuf[21],  0.050f),
-            BackLimit             = ParseF(_vtxBuf[22],  0.000f),
-            BackStrength          = ParseF(_vtxBuf[23],  0.000f),
-            BackSmooth            = ParseF(_vtxBuf[24],  0.000f),
-            BreastGuardStrength   = ParseF(_vtxBuf[25],  1.000f),
-            ClothTopMult          = ParseF(_vtxBuf[26],  1.010f),
-            ClothBotMult          = ParseF(_vtxBuf[27],  1.010f),
-            ClothBraMult          = ParseF(_vtxBuf[28],  1.010f),
-            ClothShortsMult       = ParseF(_vtxBuf[29],  1.010f),
-            ClothPanstMult        = ParseF(_vtxBuf[30],  1.010f),
-            ClothOtherMult        = ParseF(_vtxBuf[31],  1.010f),
-            ClothDistortThreshold = ParseF(_vtxBuf[32],  1.200f),
-            ClothDistortNeighborDiff = ParseF(_vtxBuf[33],  0.450f),
-        };
-
-        private static float ParseF(string s, float fallback)
-        {
-            if (string.IsNullOrEmpty(s)) return fallback;
-            if (float.TryParse(s, NumberStyles.Float,
-                    CultureInfo.InvariantCulture, out float v)) return v;
-            return fallback;
-        }
-
-        private static string Fmt(float v) =>
-            v.ToString("F3", CultureInfo.InvariantCulture);
-
+        [HideFromIl2Cpp]
         private void DrawVtxSettings()
         {
-            EnsureVtxBuf();
-            GUILayout.Space(4);
-
-            // ── Status line (bone-finding / boneLen / last rate) ─────────
-            {
-                string status = _selectedCharaId >= 0
-                    ? BellyVertexMorph.GetStatusLine(_selectedCharaId)
-                    : "select a character above";
-                GUILayout.Label("State: " + status);
-            }
-
-            bool changed = false;
-
-            // ── Start Day ────────────────────────────────────────────────
             GUILayout.BeginHorizontal();
-            GUILayout.Label("Start Day:", GUILayout.Width(110));
-            string sdNext = GUILayout.TextField(_startDayBuf, GUILayout.Width(55));
-            if (sdNext != _startDayBuf) { _startDayBuf = sdNext; changed = true; }
-            if (int.TryParse(_startDayBuf, out int sdParsed))
+            if (GUILayout.Button(BellyVertexMorph.ForceApplyEnabled ? "Preview: ON (click to stop)" : "Enable Preview"))
             {
-                int sdSlid = Mathf.RoundToInt(
-                    GUILayout.HorizontalSlider(sdParsed, 0f, 280f, GUILayout.Width(140)));
-                if (sdSlid != sdParsed) { _startDayBuf = sdSlid.ToString(); changed = true; }
+                BellyVertexMorph.ForceApplyEnabled = !BellyVertexMorph.ForceApplyEnabled;
+                BellyVertexMorph.ForceApplyCharaId = _selectedCharaId;
+                if (!BellyVertexMorph.ForceApplyEnabled) BellyVertexMorph.ForgetAll();
+                ApplyBellyAll();
+            }
+            if (GUILayout.Button("Reset / restore meshes"))
+            {
+                BellyVertexMorph.ForceApplyEnabled = false;
+                ResetBellyAll();
             }
             GUILayout.EndHorizontal();
 
-            GUILayout.Space(4);
-            _vtxScroll = GUILayout.BeginScrollView(_vtxScroll, GUILayout.Height(360));
+            var area = GUILayoutUtility.GetRect(0, 360, GUILayout.ExpandWidth(true));
+            _vtxScroll = GUI.BeginScrollView(area, _vtxScroll, new Rect(0, 0, area.width - 20, _vtxContentHeight));
+            float width = area.width - 26;
+            float y = 0;
+            BellyVertexMorph.ForceApplyRate = Slider("Growth stage", BellyVertexMorph.ForceApplyRate, 0, 1, ref y, width);
+        VtxSettings p = BellyDeformSettings.Vtx;
+        p.GrowthFullness = Slider("Forward fullness", p.GrowthFullness, 0.5f, 1.6f, ref y, width);
+        p.GrowthWidth = Slider("Belly width", p.GrowthWidth, 0.5f, 2f, ref y, width);
+        p.UpperReach = Slider("Upper abdomen reach", p.UpperReach, 0.75f, 1.2f, ref y, width);
+        p.VerticalRange = Slider("Vertical influence range", p.VerticalRange, .6f, 1.2f, ref y, width);
+        p.WallSmoothing = Slider("Whole-abdomen smoothing", p.WallSmoothing, 0, 2, ref y, width);
+        p.SagStrength = Slider("Belly sag (0 = off)", p.SagStrength, 0, 2, ref y, width);
+        p.MidVolume = Slider("Second-stage volume", p.MidVolume, .75f, 1.5f, ref y, width);
+        p.LowerPoleLift = Slider("Late lower-pole lift", p.LowerPoleLift, 0, 2, ref y, width);
+        p.SkinClearance = Slider("Skin clearance", p.SkinClearance, 0, .2f, ref y, width);
+        p.LateSettle = Slider("Late settling", p.LateSettle, 0, 1, ref y, width);
+        p.ClothOffset = Slider("Clothing displacement", p.ClothOffset, 0.8f, 1.3f, ref y, width);
+        p.ClothTopMult = p.ClothBotMult = p.ClothBraMult = p.ClothShortsMult = p.ClothPanstMult = p.ClothOtherMult = p.ClothOffset;
+        GUI.Label(new Rect(0,y,width,24),"Virtual axis / pose response");y+=28;
+        p.VirtualAxisStrength=Slider("Virtual axis strength (0 = native)",p.VirtualAxisStrength,0,1,ref y,width);
+        p.AxisBlendStart=Slider("Blend start / torso span",p.AxisBlendStart,0,.15f,ref y,width);
+        p.AxisBlendFull=Slider("Full blend / torso span",p.AxisBlendFull,.05f,.6f,ref y,width);
+        GUI.Label(new Rect(0,y,width,24),"Lower attachment / original body height");y+=28;
+        p.LowerTransitionStart=Slider("Lower start above pelvic floor / span",p.LowerTransitionStart,-.50f,.75f,ref y,width);
+        p.LowerTransitionWidth=Slider("Lower transition width / span",p.LowerTransitionWidth,.02f,1.50f,ref y,width);
+        p.LowerTransitionBias=Slider("Lower curve bias (- earlier / + later)",p.LowerTransitionBias,-2,2,ref y,width);
+        GUI.Label(new Rect(0,y,width,24),"Upper release / original body height");y+=28;
+        p.UpperTransitionStart=Slider("Upper start above waist datum / span",p.UpperTransitionStart,-.50f,1f,ref y,width);
+        p.UpperTransitionWidth=Slider("Upper transition width / span",p.UpperTransitionWidth,.02f,1.50f,ref y,width);
+        p.UpperTransitionBias=Slider("Upper curve bias (- hold / + release)",p.UpperTransitionBias,-2,2,ref y,width);
+        p.UpperTransitionJoin=Slider("Upper join / transition width",p.UpperTransitionJoin,.02f,1f,ref y,width);
+        p.UpperTransitionActivation=Slider("Upper activation displacement / span",p.UpperTransitionActivation,.001f,.15f,ref y,width);
+        GUI.Label(new Rect(0,y,width,24),"Additional restrictions (trial defaults: OFF)");y+=28;
+        p.BreastExclusionEnabled=Toggle("Exclude breast-weighted vertices",p.BreastExclusionEnabled,ref y,width);
+        p.UpperBoneFilterEnabled=Toggle("Upper abdomen bone-weight filter",p.UpperBoneFilterEnabled,ref y,width);
+        p.UpperFieldFadeEnabled=Toggle("Extra shape-field top fade",p.UpperFieldFadeEnabled,ref y,width);
+        p.AxisPullLow=Slider("Pull at small angles",p.AxisPullLow,0,1,ref y,width);
+        p.AxisPullHigh=Slider("Pull at large angles",p.AxisPullHigh,0,1,ref y,width);
+        p.AxisPullAngle=Slider("Full-pull angle (degrees)",p.AxisPullAngle,10,120,ref y,width);
+        p.AxisAnchorY=Slider("Anchor height / torso span",p.AxisAnchorY,-.2f,.2f,ref y,width);
+        p.AxisAnchorZ=Slider("Anchor forward / torso span",p.AxisAnchorZ,-.2f,.2f,ref y,width);
+        p.SkinShadingSmoothing=Slider("Skin lighting smoothing (geometry unchanged)",p.SkinShadingSmoothing,0,1,ref y,width);
+        GUI.Label(new Rect(0,y,width,24),"Original navel / local geometry");y+=28;
+        GUI.Label(new Rect(0,y,width,24),BellyVertexMorph.GetNavelStatus(_selectedCharaId >= 0 ? _selectedCharaId : 0));y+=28;
+        bool fullNavel=GUI.Toggle(new Rect(0,y,width,24),p.NavelPreviewFull,"Preview full navel response at current belly size");y+=28;
+        if(fullNavel!=p.NavelPreviewFull){p.NavelPreviewFull=fullNavel;BellyVertexMorph.InvalidateAll();}
+        GUI.Label(new Rect(0,y,width,24),$"Navel stage response: {BellyShape.NavelStageResponse(BellyVertexMorph.ForceApplyRate,p)*100:F1}% (geometry only)");y+=28;
+        if(GUI.Button(new Rect(0,y,width/2-4,28),"Navel visible preset"))
+        {
+            p.NavelPreviewFull=true;p.NavelEversion=1;p.NavelHeight=.012f;p.NavelRadius=.06f;p.NavelProportion=.85f;
+            BellyVertexMorph.InvalidateAll();
+        }
+        if(GUI.Button(new Rect(width/2+4,y,width/2-4,28),"Navel off"))
+        {p.NavelEversion=0;p.NavelProportion=0;BellyVertexMorph.InvalidateAll();}
+        y+=35;
+        p.NavelEversion=Slider("Navel eversion (0 = off)",p.NavelEversion,0,2,ref y,width);
+        p.NavelStart=Slider("Navel change starts at stage",p.NavelStart,.3f,.95f,ref y,width);
+        p.NavelHeight=Slider("Navel height / torso span",p.NavelHeight,0,.03f,ref y,width);
+        p.NavelRadius=Slider("Navel patch radius / torso span",p.NavelRadius,.015f,.08f,ref y,width);
+        p.NavelProportion=Slider("Navel proportion retention",p.NavelProportion,0,1,ref y,width);
+        if (GUI.Button(new Rect(0, y, width / 2 - 4, 28), "Default shape"))
+        {
+            BellyDeformSettings.SetLive(BellyDeformSettings.StartDay, new VtxSettings());
+            BellyVertexMorph.InvalidateAll();
+        }
+        if (GUI.Button(new Rect(width / 2 + 4, y, width / 2 - 4, 28), "Write diagnostic log")) DumpMeshInfoAll();
+        y += 35;
+        if (GUI.Button(new Rect(0, y, width / 2 - 4, 28), "Full-term shape"))
+        {
+            BellyDeformSettings.SetLive(BellyDeformSettings.StartDay, new VtxSettings());
+            BellyVertexMorph.ForceApplyRate=1f;
+            BellyVertexMorph.ForceApplyCharaId=_selectedCharaId;
+            BellyVertexMorph.ForceApplyEnabled=true;
+            ApplyBellyAll();
+            BellyVertexMorph.InvalidateAll();
+        }
+        if (GUI.Button(new Rect(width / 2 + 4, y, width / 2 - 4, 28), "Rebuild shape")) BellyVertexMorph.InvalidateAll();
 
-            GUILayout.Label("── Center ──");
-            changed |= VR("Spine Lerp T",   0,   0f,    1f);
-            changed |= VR("Move Y",         2,  -2f,    2f);   // ×boneLen
-            changed |= VR("Move Z",         3,  -2f,    2f);   // ×boneLen
+            y += 36;
+            _vtxContentHeight = y;
+            GUI.EndScrollView();
+            GUILayout.Label(BellyVertexMorph.GetStatusLine(_selectedCharaId >= 0 ? _selectedCharaId : 0));
 
-            GUILayout.Space(4);
-            GUILayout.Label("── Size  (×boneLen) ──");
-            changed |= VR("Inflation Size", 1,   0.1f,  4.0f);
-            changed |= VR("Radius Side",    4,   0.05f, 4.0f);
-            changed |= VR("Radius Front",   5,   0.05f, 4.0f);
-            changed |= VR("Radius Back",    6,   0.05f, 4.0f);
-            changed |= VR("Radius Up",      7,   0.05f, 4.0f);
-            changed |= VR("Radius Down",    8,   0.05f, 4.0f);
-
-            GUILayout.Space(4);
-            GUILayout.Label("── Shape ──");
-            changed |= VR("Stretch X",      9,  -1f,   1f);
-            changed |= VR("Stretch Y",     10,  -1f,   1f);
-            changed |= VR("Stretch Z",     11,  -1f,   1f);
-            changed |= VR("Shift Y",       12,  -1.5f, 1.5f); // ×boneLen
-            changed |= VR("Shift Z",       13,  -1.5f, 1.5f); // ×boneLen
-            changed |= VR("Drop",          14,  -0.5f, 1.5f);
-            changed |= VR("Taper Y",       15,  -1f,   1f);
-            changed |= VR("Taper Z",       16,  -1f,   1f);
-            changed |= VR("Roundness",     17,  -1f,   1f);
-            // 0 = sharpest boundary; 1 = very soft, feathered edge
-            changed |= VR("Edge Smooth",   18,   0f,   1f);
-
-            GUILayout.Space(4);
-            GUILayout.Label("── Fat Fold ──");
-            changed |= VR("Fat Fold",      19,   0f,   1f);
-            changed |= VR("Fold Height",   20,  -1f,   1f);
-            changed |= VR("Fold Gap",      21,   0.01f,0.5f);
-
-            GUILayout.Space(4);
-            GUILayout.Label("── Back Limit ──");
-            changed |= VR("Back Limit",    22,   0f,   1f);
-            changed |= VR("Back Strength", 23,   0f,   1f);
-            changed |= VR("Back Smooth",   24,   0f,   1f);
-
-            GUILayout.Space(4);
-            GUILayout.Label("── Breast Guard ──────────────────");
-            changed |= VR("Breast Guard",  25,   0f,   2f);
-
-            GUILayout.Space(4);
-            GUILayout.Label("── Clothing ──────────────────────");
-            changed |= VR("Top Mult",      26,   0.5f, 3.0f); // 1.01 = +1% displacement
-            changed |= VR("Bottom Mult",   27,   0.5f, 3.0f);
-            changed |= VR("Bra Mult",      28,   0.5f, 3.0f);
-            changed |= VR("Shorts Mult",   29,   0.5f, 3.0f);
-            changed |= VR("Panst Mult",    30,   0.5f, 3.0f);
-            changed |= VR("Other Mult",    31,   0.5f, 3.0f);
-            changed |= VR("Distort Detect",32,   0.0f, 5.0f); // 0 = disabled
-            changed |= VR("Normal Neigh",  33,   0.0f, 3.0f);
-
-            GUILayout.EndScrollView();
-
-            // Live preview on any change
-            if (changed)
-            {
-                int sd = int.TryParse(_startDayBuf, out int sdv) ? sdv : 40;
-                BellyDeformSettings.SetLive(sd, BuildVtxFromBuf());
-                BellyVertexMorph.InvalidateAll();
-                _bellyMsg = "";
-            }
-
-            GUILayout.Space(4);
+            // SVS scheduling and persistence remain separate from manual AL shape controls.
             GUILayout.BeginHorizontal();
+            GUILayout.Label("Pregnancy belly start day:", GUILayout.Width(190));
+            string day = GUILayout.TextField(_startDayBuf, GUILayout.Width(60));
+            if (day != _startDayBuf)
+            {
+                _startDayBuf = day;
+                if (int.TryParse(day, out int value) && value >= 0)
+                {
+                    BellyDeformSettings.SetLive(value, BellyDeformSettings.Vtx);
+                    ApplyBellyAll();
+                }
+            }
+            else _startDayBuf = BellyDeformSettings.StartDay.ToString();
             if (GUILayout.Button("Save to File"))
             {
-                int sd = int.TryParse(_startDayBuf, out int sdv) ? sdv : 40;
-                BellyDeformSettings.Save(sd, BuildVtxFromBuf());
-                BellyVertexMorph.InvalidateAll();
+                BellyDeformSettings.Save(BellyDeformSettings.StartDay, BellyDeformSettings.Vtx);
                 _bellyMsg = "Saved!";
             }
-            if (GUILayout.Button("Reset Defaults"))
-            {
-                // Also delete the JSON so any old-format file can't interfere on next load.
-                BellyDeformSettings.DeleteConfigFile();
-                BellyDeformSettings.ResetToDefaults();
-                SyncBufFromSettings();
-                BellyVertexMorph.InvalidateAll();
-                _bellyMsg = "Reset to defaults (config file deleted). Click Save to write new file.";
-            }
-            GUILayout.Label(_bellyMsg, GUILayout.ExpandWidth(true));
             GUILayout.EndHorizontal();
+            if (!string.IsNullOrEmpty(_bellyMsg)) GUILayout.Label(_bellyMsg);
         }
 
-        /// <summary>
-        /// Draw one parameter row: label | text-field | slider.
-        /// The text field is the authority — typing updates the value immediately.
-        /// The slider syncs to the parsed text value; dragging it updates the text field.
-        /// Returns true when either input changed this frame.
-        /// </summary>
-        private bool VR(string label, int idx, float min, float max)
-        {
-            GUILayout.BeginHorizontal();
-            GUILayout.Label(label, GUILayout.Width(110));
+    [HideFromIl2Cpp]
+    private float Slider(string label, float value, float min, float max, ref float y, float width)
+    {
+        GUI.Label(new Rect(0, y, width, 24), $"{label}: {value:F3}");
+        float next = GUI.HorizontalSlider(new Rect(0, y + 25, width, 20), value, min, max);
+        y += 49;
+        if (!Mathf.Approximately(value, next)) BellyVertexMorph.InvalidateAll();
+        return next;
+    }
 
-            // Text field
-            string prev = _vtxBuf[idx];
-            string next = GUILayout.TextField(prev, GUILayout.Width(60));
-            bool changed = false;
-            if (next != prev) { _vtxBuf[idx] = next; changed = true; }
+    [HideFromIl2Cpp]
+    private bool Toggle(string label, bool value, ref float y, float width)
+    {
+        bool next = GUI.Toggle(new Rect(0, y, width, 24), value, label);
+        y += 28;
+        if (value != next) BellyVertexMorph.InvalidateAll();
+        return next;
+    }
 
-            // Slider — clamp the parsed value into [min, max] before passing it to
-            // HorizontalSlider.  Without this, a partially-typed or empty field yields
-            // ParseF(...)=0 which may be below min (e.g. RadiusSide min=0.05).
-            // Unity IMGUI then clamps the slider output to min, so
-            // !Approximately(min, 0) is TRUE every frame → spurious changed=true every
-            // frame → InvalidateAll() every frame → full ApplySMR + log spam → freeze.
-            float cur     = ParseF(_vtxBuf[idx], 0f);
-            float curSlid = Mathf.Clamp(cur, min, max);
-            float slid    = GUILayout.HorizontalSlider(curSlid, min, max, GUILayout.Width(140));
-            if (!Mathf.Approximately(slid, curSlid))
-            {
-                _vtxBuf[idx] = Fmt(slid);
-                changed = true;
-            }
-
-            GUILayout.EndHorizontal();
-            return changed;
-        }
 
         private static string GetName(PregnancyCharaController ctrl)
         {
