@@ -5,7 +5,7 @@ namespace SVSPregnancy
     // ── Vertex-mode parameters ───────────────────────────────────────────
     public class VtxSettings
     {
-        // Defaults captured from the user's 2026-10-06 00:33:28 v0.2.23 diagnostic.
+        // Defaults captured from SVSPregnancy_belly.json saved 2026-10-06 06:10:36 (UTC+08:00).
         // Keep full precision so resetting reproduces the accepted settings.
         [JsonPropertyName("growthFullness")] public float GrowthFullness { get; set; } = 1.116265f;
         [JsonPropertyName("growthWidth")] public float GrowthWidth { get; set; } = 1.1927711f;
@@ -19,20 +19,20 @@ namespace SVSPregnancy
         [JsonPropertyName("skinClearance")] public float SkinClearance { get; set; } = 0.19116466f;
         // Pose equation: a virtual matrix palette entry, without hierarchy bones.
         [JsonPropertyName("virtualAxisStrength")] public float VirtualAxisStrength { get; set; } = 1f;
-        [JsonPropertyName("axisBlendStart")] public float AxisBlendStart { get; set; } = 0.02f;
-        [JsonPropertyName("axisBlendFull")] public float AxisBlendFull { get; set; } = 0.25f;
+        [JsonPropertyName("axisBlendStart")] public float AxisBlendStart { get; set; } = 0.103984065f;
+        [JsonPropertyName("axisBlendFull")] public float AxisBlendFull { get; set; } = 0.13217132f;
         // Rest-height offsets and widths are normalised by torso span.
-        [JsonPropertyName("lowerTransitionStart")] public float LowerTransitionStart { get; set; } = .02f;
-        [JsonPropertyName("lowerTransitionWidth")] public float LowerTransitionWidth { get; set; } = .60f;
+        [JsonPropertyName("lowerTransitionStart")] public float LowerTransitionStart { get; set; } = -0.03934264f;
+        [JsonPropertyName("lowerTransitionWidth")] public float LowerTransitionWidth { get; set; } = 0.7216733f;
         // Negative: earlier virtual attachment; positive: later.
-        [JsonPropertyName("lowerTransitionBias")] public float LowerTransitionBias { get; set; } = 0f;
+        [JsonPropertyName("lowerTransitionBias")] public float LowerTransitionBias { get; set; } = 1.3625498f;
         // Upper start is relative to the original waist/growth datum (TorsoProfile.Navel).
-        [JsonPropertyName("upperTransitionStart")] public float UpperTransitionStart { get; set; } = 0.10542166f;
-        [JsonPropertyName("upperTransitionWidth")] public float UpperTransitionWidth { get; set; } = 0.5965462f;
+        [JsonPropertyName("upperTransitionStart")] public float UpperTransitionStart { get; set; } = 0.22609562f;
+        [JsonPropertyName("upperTransitionWidth")] public float UpperTransitionWidth { get; set; } = 0.40326697f;
         // Negative: later release to native skinning; positive: earlier release.
-        [JsonPropertyName("upperTransitionBias")] public float UpperTransitionBias { get; set; } = 0f;
-        [JsonPropertyName("upperTransitionJoin")] public float UpperTransitionJoin { get; set; } = .20f;
-        [JsonPropertyName("upperTransitionActivation")] public float UpperTransitionActivation { get; set; } = .02f;
+        [JsonPropertyName("upperTransitionBias")] public float UpperTransitionBias { get; set; } = -0.3187251f;
+        [JsonPropertyName("upperTransitionJoin")] public float UpperTransitionJoin { get; set; } = 0.10394423f;
+        [JsonPropertyName("upperTransitionActivation")] public float UpperTransitionActivation { get; set; } = 0.025932271f;
         // Retained for loading old presets only. The per-frame support pass is retired.
         [JsonPropertyName("upperFoldSupport")] public float UpperFoldSupport { get; set; } = 0f;
         // Trial switches: height transitions remain active independently.

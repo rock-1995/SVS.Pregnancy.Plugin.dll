@@ -60,7 +60,7 @@ namespace SVSPregnancy
 
         public const string Transplanter = "Zentaiman";
         public const string PluginVersion = "0.2.7";
-        public const string BuildMarker = "20261006-AL-0.2.26-SVS-upper-attachment-r3";
+        public const string BuildMarker = "20261006-AL-0.2.26-SVS-saved-defaults-r4";
         public static PregnancyWorldController _worldController;
 
         public static PregnancyAssetController _assetController;                    
