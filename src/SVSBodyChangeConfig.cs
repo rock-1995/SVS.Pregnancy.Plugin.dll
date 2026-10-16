@@ -18,7 +18,7 @@ internal static class SVSBodyChangeConfig
             "Lower limit in character creator units (100 = normalized 1). Applies only to changed channels. Negative values allowed; reversed bounds are ordered for calculation.");
         BodyUpper = config.Bind(section, "Maximum slider value", 100,
             "Upper limit in character creator units. Values above 100 are allowed. Adds the template difference to each character's original body.");
-        NippleColorMaximum = config.Bind(section, "Nipple color progress maximum", .85f,
+        NippleColorMaximum = config.Bind(section, "Nipple color progress maximum", .45070422f,
             new ConfigDescription("Blend each character's original nipple color toward p.png. Color progress is capped separately from body progress; a black target darkens without changing hue. 0 disables color changes.", new AcceptableValueRange<float>(0, 1)));
     }
 

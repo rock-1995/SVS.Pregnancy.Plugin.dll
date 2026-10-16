@@ -19,7 +19,7 @@ The plugin includes its own body and clothing deformation system. No separate ch
 
 Requires a working **BepInEx IL2CPP** installation for SVS. BepInEx Configuration Manager is optional and provides the F1 settings window when installed with its usual key binding.
 
-1. Close the game and download `SVS_Pregnancy_0.6.10.zip` from the release page.
+1. Close the game and download `SVS_Pregnancy_0.6.11.zip` from the release page.
 2. Extract its `BepInEx` folder into the `SamabakeScramble` game folder.
 3. Check that the DLL and template folder are arranged as follows:
 
@@ -51,7 +51,7 @@ Use Configuration Manager or edit `BepInEx/config/SVS.SVSPregnancy.cfg` while th
 | General | Futanaris Can Inseminate | Allow futanari characters to impregnate female partners. |
 | Pregnancy body changes | Births for full change | Set how many births are needed for the full template body change; default **5**. |
 | Pregnancy body changes | Minimum / Maximum slider value | Set limits for affected body sliders; defaults **0–100**. |
-| Pregnancy body changes | Nipple color progress maximum | Cap color progression separately; default **0.85**, and **0** disables the color change. |
+| Pregnancy body changes | Nipple color progress maximum | Cap color progression separately; default **0.45070422** (about **45.07%**), and **0** disables the color change. |
 | Debug | Debug UI Key | Change the F8 panel shortcut. |
 
 ### Belly shape and F8

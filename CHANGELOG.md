@@ -1,3 +1,9 @@
+# 0.6.11 — 2026-10-17
+
+- Set the default nipple-color progress cap to **0.45070422** (about **45.07%**). Existing saved configuration values remain in use.
+
+---
+
 # 0.6.10 — 2026-10-17
 
 - Add the AL 0.2.43 belly shape/protection controls and O/P template body changes, including saved birth counts.

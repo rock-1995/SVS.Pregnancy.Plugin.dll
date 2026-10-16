@@ -25,5 +25,5 @@ internal static class BodyChangeMath
         (float)Math.Clamp(original + (target - original) * Math.Clamp(progress, 0, 1), 0, 1);
 
     internal static double ColorProgress(double progress, float maximum) =>
-        Math.Min(progress, float.IsFinite(maximum) ? Math.Clamp(maximum, 0, 1) : .85);
+        Math.Min(progress, float.IsFinite(maximum) ? Math.Clamp(maximum, 0, 1) : .45070422f);
 }
