@@ -162,12 +162,24 @@ namespace SVSPregnancy
         // ─────────────────────────────────────────────────────────────────
         // Character panel
         // ─────────────────────────────────────────────────────────────────
+        private readonly Dictionary<string, ShapeInput> _shapeInputs = new();
+        private string _birthsInput = "";
+        private int _birthsInputId = int.MinValue;
+
         private void DrawCharaInfo(PregnancyCharaController ctrl)
         {
             var info = ctrl._pregnancyInfo;
 
             GUILayout.Label($"[{GetName(ctrl)}]  charaId = {ctrl._charaId}");
             GUILayout.Space(4);
+            if (_birthsInputId != ctrl._charaId) { _birthsInputId = ctrl._charaId; _birthsInput = info._births.ToString(); }
+            GUILayout.Label($"Births: {info._births}   Body change: {BodyChangeMath.Progress(info.IsPregnant, info.Progress, info._births, SVSBodyChangeConfig.BodyBirths.Value):P1}");
+            GUILayout.BeginHorizontal();
+            GUILayout.Label("Set births:", GUILayout.Width(90));
+            _birthsInput = GUILayout.TextField(_birthsInput, GUILayout.Width(70));
+            if (GUILayout.Button("Apply births") && int.TryParse(_birthsInput, out int births) && births >= 0)
+            { info._births = births; ApplyBellyAll(); }
+            GUILayout.EndHorizontal();
 
             if (info.IsPregnant)
             {
@@ -261,7 +273,8 @@ namespace SVSPregnancy
         p.UpperReach = Slider("Upper abdomen reach", p.UpperReach, 0.75f, 1.2f, ref y, width);
         p.VerticalRange = Slider("Vertical influence range", p.VerticalRange, .6f, 1.2f, ref y, width);
         p.WallSmoothing = Slider("Whole-abdomen smoothing", p.WallSmoothing, 0, 2, ref y, width);
-        p.SagStrength = Slider("Belly sag (0 = off)", p.SagStrength, 0, 2, ref y, width);
+        p.SagStrength = Slider("Skin slide / density (legacy sag)", p.SagStrength, 0, 2, ref y, width);
+        p.BellySag = Slider("Belly sag (downward shift, 0 = off)", p.BellySag, 0, 4, ref y, width);
         p.MidVolume = Slider("Second-stage volume", p.MidVolume, .75f, 1.5f, ref y, width);
         p.LowerPoleLift = Slider("Late lower-pole lift", p.LowerPoleLift, 0, 2, ref y, width);
         p.SkinClearance = Slider("Skin clearance", p.SkinClearance, 0, .2f, ref y, width);
@@ -283,7 +296,15 @@ namespace SVSPregnancy
         p.UpperTransitionJoin=Slider("Upper join / transition width",p.UpperTransitionJoin,.02f,1f,ref y,width);
         p.UpperTransitionActivation=Slider("Upper activation displacement / span",p.UpperTransitionActivation,.001f,.15f,ref y,width);
         GUI.Label(new Rect(0,y,width,24),"Additional restrictions (trial defaults: OFF)");y+=28;
-        p.BreastExclusionEnabled=Toggle("Exclude breast-weighted vertices",p.BreastExclusionEnabled,ref y,width);
+        p.HeightBoundaryArc=Slider("Height boundary arc (0 = straight)",p.HeightBoundaryArc,0,1,ref y,width);
+        p.BreastExclusionEnabled=Toggle("Breast physics-weight guard",p.BreastExclusionEnabled,ref y,width);
+        p.BreastGuardStrength=Slider("Breast guard strength x physics weight",p.BreastGuardStrength,0,4,ref y,width);
+        p.LowerBreastGuardWidth=Slider("Below-breast guard width / span (0 = off)",p.LowerBreastGuardWidth,0,.35f,ref y,width);
+        p.ThighGuardSpeed=Slider("Thigh side guard speed (0 = off)",p.ThighGuardSpeed,0,8,ref y,width);
+        p.InnerThighGuardStrength=Slider("Thigh bone guard (0 = off)",p.InnerThighGuardStrength,0,4,ref y,width);
+        p.ThighGuardWidth=Slider("Thigh guard transition width / span",p.ThighGuardWidth,0,.5f,ref y,width);
+        p.BottomGuardStrength=Slider("Lowest belly / pubic guard (0 = off)",p.BottomGuardStrength,0,1,ref y,width);
+        p.BottomGuardWidth=Slider("Lowest belly guard width / span",p.BottomGuardWidth,0,.5f,ref y,width);
         p.UpperBoneFilterEnabled=Toggle("Upper abdomen bone-weight filter",p.UpperBoneFilterEnabled,ref y,width);
         p.UpperFieldFadeEnabled=Toggle("Extra shape-field top fade",p.UpperFieldFadeEnabled,ref y,width);
         p.AxisPullLow=Slider("Pull at small angles",p.AxisPullLow,0,1,ref y,width);
@@ -359,11 +380,22 @@ namespace SVSPregnancy
     [HideFromIl2Cpp]
     private float Slider(string label, float value, float min, float max, ref float y, float width)
     {
-        GUI.Label(new Rect(0, y, width, 24), $"{label}: {value:F3}");
-        float next = GUI.HorizontalSlider(new Rect(0, y + 25, width, 20), value, min, max);
-        y += 49;
-        if (!Mathf.Approximately(value, next)) BellyVertexMorph.InvalidateAll();
-        return next;
+        if(!_shapeInputs.TryGetValue(label,out var input))_shapeInputs[label]=input=new ShapeInput();
+        input.Synchronize(value);
+        float before=value;
+        GUI.Label(new Rect(0,y,width,24),label);
+        float shown=ShapeInput.SliderPosition(value,min,max);
+        float next=ShapeInput.FromSlider(value,GUI.HorizontalSlider(new Rect(0,y+25,width-178,20),shown,min,max),min,max);
+        if(next!=value){value=next;input.Synchronize(value);}
+        input.Text=GUI.TextField(new Rect(width-170,y+22,108,24),input.Text);
+        bool valid=ShapeInput.TryRead(input.Text,out float typed);
+        bool enabled=GUI.enabled;GUI.enabled=enabled&&valid;
+        if(GUI.Button(new Rect(width-58,y+22,58,24),"Apply")){value=typed;input.Synchronize(value);}
+        GUI.enabled=enabled;
+        if(value!=before)BellyVertexMorph.InvalidateAll();
+        y+=52;
+        if(!valid){GUI.Label(new Rect(0,y,width,24),"Enter a finite number; scientific notation is supported.");y+=26;}
+        return value;
     }
 
     [HideFromIl2Cpp]

@@ -1,4 +1,4 @@
-using BepInEx;
+﻿using BepInEx;
 using BepInEx.Configuration;
 using BepInEx.Unity.IL2CPP;
 using HarmonyLib;
@@ -59,8 +59,8 @@ namespace SVSPregnancy
         public const string PluginName = "SVSPregnancy";
 
         public const string Transplanter = "Zentaiman";
-        public const string PluginVersion = "0.2.7";
-        public const string BuildMarker = "20261006-AL-0.2.26-SVS-saved-defaults-r4";
+        public const string PluginVersion = "0.6.10";
+        public const string BuildMarker = "20261017-SVS-reload-cost-and-color-endpoint";
         public static PregnancyWorldController _worldController;
 
         public static PregnancyAssetController _assetController;                    
@@ -202,6 +202,7 @@ namespace SVSPregnancy
             #region Config  
 
             ConfigFile cfg = Config;
+            SVSBodyChangeConfig.Bind(cfg);
 
             ConfigEnable = cfg.Bind<bool>("General", "Enable", true, new ConfigDescription("", null, new object[]
             {

@@ -20,5 +20,5 @@
     <None Update="release-defaults.json" CopyToOutputDirectory="PreserveNewest" />
     <None Update="crack-repro-settings.json" CopyToOutputDirectory="PreserveNewest" />
     <None Update="user-trace-0.1.3-bones.json" CopyToOutputDirectory="PreserveNewest" />
-  </ItemGroup>
+  <None Include="com3d2-pose-defaults.json;previous-defaults-0.2.34.json;previous-defaults-0.2.31.json;svs-binding-defaults.json" CopyToOutputDirectory="PreserveNewest" /><Compile Include="../src/BodyProtection.cs" /></ItemGroup>
 </Project>

@@ -49,6 +49,7 @@ internal static class MorphReadiness
         try
         {
             if (__instance == null) return;
+            BodyChangeRuntime.Release(__instance);
             // These synchronous operations replace meshes. Return native meshes
             // before the game rebuilds its own caches. The completed native update
             // reapplies in the same render cycle, without a visible waiting phase.

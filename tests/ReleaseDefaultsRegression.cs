@@ -10,7 +10,7 @@ internal static class ReleaseDefaultsRegression
         var expected = preset.RootElement.GetProperty("vtx");
         using var actual = JsonDocument.Parse(JsonSerializer.Serialize(new VtxSettings()));
         check("Release preset keeps format 5 and start day 40", preset.RootElement.GetProperty("version").GetInt32() == 5 && preset.RootElement.GetProperty("startDay").GetInt32() == 40);
-        check("Release defaults and release preset contain exactly 73 settings", expected.EnumerateObject().Count() == 73 && actual.RootElement.EnumerateObject().Count() == 73);
+        check("Release defaults and release preset contain exactly 81 settings", expected.EnumerateObject().Count() == 81 && actual.RootElement.EnumerateObject().Count() == 81);
         foreach (var property in expected.EnumerateObject())
         {
             bool found = actual.RootElement.TryGetProperty(property.Name, out var value);

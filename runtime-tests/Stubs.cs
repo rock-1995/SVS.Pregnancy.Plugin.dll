@@ -48,7 +48,7 @@ namespace UnityEngine
 }
 namespace Character
 {
-    public class HumanBody { public SkinnedMeshRenderer rendBody, rendSimpleBody; }
+    public class HumanBody { public void UpdateShapeBody() {} public SkinnedMeshRenderer rendBody, rendSimpleBody; }
     public class Human : UnityEngine.Object
     {
         public bool disposed,isReloading;
@@ -77,7 +77,7 @@ namespace HarmonyLib
     public static class Priority { public const int Last=0; }
     public static class AccessTools
     {
-        public static MethodInfo Method(Type type,string name)=>type.GetMethod(name);
+        public static MethodInfo Method(Type type,string name,Type[] parameters=null)=>parameters==null?type.GetMethod(name):type.GetMethod(name,parameters);
         public static List<MethodInfo> GetDeclaredMethods(Type type)=>type.GetMethods(BindingFlags.DeclaredOnly|BindingFlags.Public|BindingFlags.Instance|BindingFlags.Static).ToList();
     }
 }
@@ -112,7 +112,7 @@ namespace SVSPregnancy
     }
     public class PregnancyHumanController : UnityEngine.Object
     {
-        public Action Callback;
+        public PregnancyCharaController _charactrl; public Action Callback;
         public void AfterNativeUpdate()=>Callback?.Invoke();
     }
     internal static class BellyVertexMorph
@@ -124,6 +124,7 @@ namespace SVSPregnancy
         internal static int Invalidations;
         internal static void ApplyCore(Human h,int id,float rate)
         {
+            BodyChangeRuntime.Events.Add("belly");
             if(!MorphReadiness.TryBeginApply(h))throw new Exception("Mutation outside native completion");
             var renderer=h.body.rendBody;
             if(!MeshLease.Owns(renderer.sharedMesh))throw new Exception("Mutation of unowned source");
@@ -137,7 +138,7 @@ namespace SVSPregnancy
             }
             if(FailApply)throw new Exception("simulated partial binding failure");
         }
-        internal static void UpdateVirtual(Human h)=>Updates[h.Pointer]=Updates.GetValueOrDefault(h.Pointer)+1;
+        internal static void UpdateVirtual(Human h) { BodyChangeRuntime.Events.Add("virtual"); Updates[h.Pointer]=Updates.GetValueOrDefault(h.Pointer)+1; }
         internal static void ForgetHumanCore(Human h)
         {
             Restores[h.Pointer]=Restores.GetValueOrDefault(h.Pointer)+1;
@@ -147,4 +148,25 @@ namespace SVSPregnancy
         }
         internal static void Invalidate(int id)=>Invalidations++;
     }
+}
+
+namespace SVSPregnancy {
+ public class PregnancyCharaController { public PregnancyInfo _pregnancyInfo; public class PregnancyInfo {} }
+ internal static class SVSBodyChangeConfig {
+  internal static bool Preview,Contribution;
+  internal static PregnancyHumanController Controller(Character.Human h)=>h.gameObject.Controller;
+  internal static bool ManualPreviewActive(Character.Human h)=>Preview;
+  internal static bool HasContribution(PregnancyCharaController.PregnancyInfo i)=>i!=null && Contribution;
+ }
+ internal static class BodyChangeRuntime {
+  internal static List<string> Events=new();
+  internal static HashSet<IntPtr> Active=new();
+  internal static void NativeShapeUpdated(Character.HumanBody h) {}
+  internal static void ApplyAfterBelly(Character.Human h,PregnancyCharaController.PregnancyInfo info) {
+   Events.Add("body"); if (SVSBodyChangeConfig.HasContribution(info) && !SVSBodyChangeConfig.Preview) Active.Add(h.Pointer);else Release(h);
+  }
+  internal static void Release(Character.Human h) { Active.Remove(h.Pointer); }
+  internal static void ReleaseAll() { Active.Clear(); }
+ }
+ internal static class BodyChangeAnimation { internal static void Install(HarmonyLib.Harmony h) {} }
 }

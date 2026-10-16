@@ -83,6 +83,18 @@ var differentTail=new[]{originalBones[0],originalBones[1],new Transform()};
 Check("An unrecognized bone suffix is not removed",ReferenceEquals(SkinBoneRestore.Restore(originalBones,installedBones,differentTail,(a,b)=>a==b),differentTail));
 var idle=Create();for(int frame=0;frame<300;frame++)Tick(idle);
 Check("300 idle actor updates never scan the mesh hierarchy",idle.gameObject.Scans==0);
+var postpartum=Create();postpartum.gameObject.Controller=new PregnancyHumanController {_charactrl=new PregnancyCharaController {_pregnancyInfo=new()}};
+SVSBodyChangeConfig.Contribution=true;
+Tick(postpartum);Check("Postpartum body changes run without a belly request",BodyChangeRuntime.Active.Contains(postpartum.Pointer));
+BodyChangeRuntime.Events.Clear();SVSDeformationRuntime.Request(postpartum,19,.6f);Tick(postpartum);
+Check("Static belly precedes body sliders and final virtual bindings",string.Join(",",BodyChangeRuntime.Events)=="belly,body,virtual");
+Load(postpartum,"ReloadCoordinate");Check("Destructive native reload restores body before replacement",!BodyChangeRuntime.Active.Contains(postpartum.Pointer));
+Tick(postpartum);Check("Reload reapplies retained postpartum state",BodyChangeRuntime.Active.Contains(postpartum.Pointer));
+SVSBodyChangeConfig.Preview=true;Tick(postpartum);Check("Manual belly preview suspends body template",!BodyChangeRuntime.Active.Contains(postpartum.Pointer));
+SVSBodyChangeConfig.Preview=false;Tick(postpartum);PregnancyPlugin.ConfigEnable.Value=false;Tick(postpartum);
+Check("Disable also restores postpartum-only body changes",!BodyChangeRuntime.Active.Contains(postpartum.Pointer));
+PregnancyPlugin.ConfigEnable.Value=true;Tick(postpartum);SVSDeformationRuntime.ReleaseAll();
+Check("Global reset restores all body changes",BodyChangeRuntime.Active.Count==0);
 Console.WriteLine($"{checks} runtime adapter checks passed (modeled Unity API; no in-game verification).");
 
 }

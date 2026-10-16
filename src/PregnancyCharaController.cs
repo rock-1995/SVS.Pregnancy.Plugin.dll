@@ -1,4 +1,4 @@
-﻿using BepInEx;
+using BepInEx;
 using BepInEx.Configuration;
 using BepInEx.Unity.IL2CPP;
 using HarmonyLib;
@@ -240,6 +240,7 @@ namespace SVSPregnancy
                 _pregnancyInfo._cooldown = PregnancyInfo.defaultcooldownDays/18;
             }
             PregnancyActorController.AddEmotion(_charaId, newemotion);
+            if (babysize >= 3 && _pregnancyInfo._births < int.MaxValue) _pregnancyInfo._births++;
             _pregnancyInfo._day = -1;
             _pregnancyInfo._broken = false;
             _pregnancyInfo._father_givenname = "";
@@ -312,6 +313,8 @@ namespace SVSPregnancy
             public bool _acceptance = true;
            // public int _currentcooldownDays = 180;
             public int _sex = 0;
+            public int _births = 0;
+            public double Progress => IsPregnant && _currentMaximalPregnantDays > 0 ? System.Math.Clamp((double)_day / _currentMaximalPregnantDays, 0, 1) : 0;
             public int _day=-1;
             public int _cooldown = 0;
             public string _father_givenname = "";
@@ -332,3 +335,4 @@ namespace SVSPregnancy
 
     }
 }
+

@@ -7,6 +7,7 @@ void Check(string name, bool value)
     Console.WriteLine("PASS: " + name); passed++;
 }
 ReleaseDefaultsRegression.Run(Check);
+ProtectionRegression.Run(Check);
 LowerTransitionRegression.Run(Check);
 UpperTransitionRegression.Run(Check);
 UpperRestrictionsRegression.Run(Check);
@@ -18,6 +19,7 @@ BreastExclusionRegression.Run(Check);
 SvsAssetRegression.Landmarks(Check);
 SkinAttachmentRegression.Run(Check);
 if(args.Length>0){SvsAssetRegression.Run(args[0],Check);SkinAttachmentRegression.Asset(args[0],Check);}
+SagRegression.Run(Check,args.Length>0?args[0]:null);
 Console.WriteLine($"{passed} geometry regression checks passed.");
 }
 catch(Exception ex){Console.Error.WriteLine(ex);Environment.ExitCode=1;}

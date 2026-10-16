@@ -55,6 +55,14 @@ internal static partial class BellyVertexMorph
                     virtualBoneIndex=record?.Virtual?.Binds.Length ?? -1,
                     virtualBlend=record?.Virtual?.Blend,
                     virtualPaletteRecipes=record?.Virtual?.Recipes.Select(r=>new {bone=r.Bone,virtualShare=r.VirtualShare}).ToArray(),
+                    skirtDrape=record?.Virtual?.Skirt==null?null:new {
+                        controlled=record.Virtual.Skirt.Plan.Controlled,
+                        released=record.Virtual.Skirt.Plan.Released,
+                        offsets=Array.ConvertAll(record.Virtual.Skirt.Plan.Offsets,Vec),
+                        bindOffsets=Array.ConvertAll(record.Virtual.Skirt.Plan.BindOffsets,Vec),
+                        free=record.Virtual.Skirt.Plan.Free,
+                        recipes=record.Virtual.Skirt.Recipes.Select(r=>new {bone=r.Bone,alpha=r.Alpha,free=r.Free}).ToArray()
+                    },
                     originalSkinWeights=record?.Virtual==null?null:Array.ConvertAll(record.Virtual.Weights,w=>new float[]{w.boneIndex0,w.weight0,w.boneIndex1,w.weight1,w.boneIndex2,w.weight2,w.boneIndex3,w.weight3}),
                     skinToWorldRowMajor = skinToWorld == null ? null : Array.ConvertAll(skinToWorld, MatrixValues),
                     rendererToWorldRowMajor = MatrixValues(rendererToWorld),
@@ -65,6 +73,7 @@ internal static partial class BellyVertexMorph
                     triangles = active ? (int[])mesh.triangles : null,
                     influence = record?.BellyInfluence,
                     breastWeights = record?.BreastWeights,
+                    protectionKeep = record?.ProtectionKeep,
                     breastExcluded = record?.BreastExcluded,
                     skinWeights = weights == null ? null : Array.ConvertAll(weights, w => new float[] { w.boneIndex0, w.weight0, w.boneIndex1, w.weight1, w.boneIndex2, w.weight2, w.boneIndex3, w.weight3 })
                 });
@@ -85,7 +94,7 @@ internal static partial class BellyVertexMorph
                 updateCount=rig.UpdateCount,paletteWrites=rig.PaletteWrites,
                 meanUpdateMs=rig.UpdateCount==0?0:rig.UpdateTicks*1000.0/System.Diagnostics.Stopwatch.Frequency/rig.UpdateCount,
                 maxUpdateMs=rig.MaxTicks*1000.0/System.Diagnostics.Stopwatch.Frequency};
-            File.WriteAllText(path, JsonSerializer.Serialize(new { version = "0.2.26", deformationMode = "native-completion-material-height-no-boundary-rings", frame, anatomy = state?.Profile, virtualAxis,
+            File.WriteAllText(path, JsonSerializer.Serialize(new { version = PregnancyPlugin.PluginVersion, deformationMode = "AL-0.2.43-curved-protection-SVS-native-completion", breastPhysicsRoots=BreastPhysicsRootPaths(human), frame, anatomy = state?.Profile, virtualAxis,
                 navelResponse=BellyShape.NavelStageResponse(state?.LastAppliedRate??0,BellyDeformSettings.Vtx), settings = BellyDeformSettings.Vtx, meshes }, options));
             Log.LogInfo("[VtxDump] Geometry snapshot written: " + path);
         }

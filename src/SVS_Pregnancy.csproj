@@ -5,6 +5,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <AssemblyName>SVS_Pregnancy</AssemblyName>
+    <Version>0.6.10</Version>
     <BaseOutputPath>..\bin\</BaseOutputPath>
     <GenerateDocumentationFile>False</GenerateDocumentationFile>
     <SVSGameDir Condition="'$(SVSGameDir)' == ''">$(SVS_GAME_DIR)</SVSGameDir>
@@ -12,6 +13,10 @@
     <SVSCoreDir Condition="'$(SVSCoreDir)' == '' and '$(SVSBepInExDir)' != ''">$(SVSBepInExDir)\core</SVSCoreDir>
     <SVSInteropDir Condition="'$(SVSInteropDir)' == '' and '$(SVSBepInExDir)' != ''">$(SVSBepInExDir)\SamabakeScramble\interop</SVSInteropDir>
   </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="../templates/*.png" Link="SVSPregnancyTemplates/%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
 
   <Target Name="CheckSVSReferencePaths" BeforeTargets="ResolveReferences">
     <Error Condition="'$(SVSCoreDir)' == '' or '$(SVSInteropDir)' == ''"

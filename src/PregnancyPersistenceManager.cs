@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Text.Json;
@@ -216,6 +216,7 @@ namespace SVSPregnancy
                     if (ctrl?._pregnancyInfo == null) continue;
 
                     ctrl._pregnancyInfo._day = entry.Day;
+                    ctrl._pregnancyInfo._births = Math.Max(0, entry.Births);
                     ctrl._pregnancyInfo._cooldown = entry.Cooldown;
                     ctrl._pregnancyInfo._currentMaximalPregnantDays = entry.MaxDays;
                     ctrl._pregnancyInfo._father_givenname = entry.FatherGivenName ?? "";
@@ -254,6 +255,7 @@ namespace SVSPregnancy
                         CharaId  = ctrl._charaId,
                         Name     = name,
                         Day      = ctrl._pregnancyInfo._day,
+                        Births   = Math.Max(0, ctrl._pregnancyInfo._births),
                         Cooldown = ctrl._pregnancyInfo._cooldown,
                         MaxDays  = ctrl._pregnancyInfo._currentMaximalPregnantDays,
                         FatherGivenName = ctrl._pregnancyInfo._father_givenname,
@@ -287,6 +289,7 @@ namespace SVSPregnancy
         {
             [JsonPropertyName("charaId")]         public int    CharaId         { get; set; }
             [JsonPropertyName("name")]            public string Name            { get; set; } = "";
+            [JsonPropertyName("births")]          public int    Births          { get; set; }
             [JsonPropertyName("day")]             public int    Day             { get; set; }
             [JsonPropertyName("cooldown")]        public int    Cooldown        { get; set; }
             [JsonPropertyName("maxDays")]         public int    MaxDays         { get; set; }

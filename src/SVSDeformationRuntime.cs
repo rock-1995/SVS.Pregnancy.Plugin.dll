@@ -25,12 +25,15 @@ internal static class SVSDeformationRuntime
     internal static void Install(Harmony harmony)
     {
         MorphReadiness.Install(harmony);
+        harmony.Patch(AccessTools.Method(typeof(HumanBody), "UpdateShapeBody", Type.EmptyTypes),
+            postfix: new HarmonyMethod(typeof(BodyChangeRuntime), nameof(BodyChangeRuntime.NativeShapeUpdated)));
+        BodyChangeAnimation.Install(harmony);
         harmony.Patch(AccessTools.Method(typeof(Human), "LateUpdate"),
             postfix: new HarmonyMethod(typeof(SVSDeformationRuntime), nameof(AfterHumanLateUpdate)) { priority = Priority.Last });
         harmony.Patch(AccessTools.Method(typeof(Human), "Dispose"),
             prefix: new HarmonyMethod(typeof(SVSDeformationRuntime), nameof(BeforeHumanDispose)));
         _installed = true;
-        PregnancyPlugin._instance.Log.LogInfo("[AL morph port] AL 0.2.26 geometry and virtual skinning; native SVS Human.LateUpdate completion.");
+        PregnancyPlugin._instance.Log.LogInfo("[AL morph port] AL 0.2.43 shape/protection and O/P body changes; SVS native update order.");
     }
 
     internal static void Request(Human human, int charaId, float rate)
@@ -56,29 +59,35 @@ internal static class SVSDeformationRuntime
         {
             if (__instance.disposed) { ForgetHuman(__instance); return; }
             if (PregnancyPlugin.ConfigEnable?.Value != true || BellyVertexMorph.Paused)
-            { ReleaseVisual(__instance); return; }
+            { ReleaseVisual(__instance); BodyChangeRuntime.Release(__instance); return; }
             if (__instance.sex != 1 || __instance.gameObject == null || !__instance.gameObject.activeInHierarchy) return;
             // Rate selection only queues work. Skip all hierarchy and mesh work
             // for actors with no requested deformation or a latched setup failure.
-            var component = __instance.gameObject.GetComponent(Il2CppType.Of<PregnancyHumanController>());
-            if (component != null) component.TryCast<PregnancyHumanController>()?.AfterNativeUpdate();
-            if (!Visuals.TryGetValue(__instance.Pointer, out var visual) || visual.Failed) return;
+            var controller = SVSBodyChangeConfig.Controller(__instance);
+            controller?.AfterNativeUpdate();
+            var info = controller?._charactrl?._pregnancyInfo;
+            Visuals.TryGetValue(__instance.Pointer, out var visual);
+            if (visual?.Failed == true) return;
+            bool body = !SVSBodyChangeConfig.ManualPreviewActive(__instance) && SVSBodyChangeConfig.HasContribution(info);
+            if (!body) BodyChangeRuntime.Release(__instance);
+            if (visual == null && !body) return;
             if (!MorphReadiness.EnterNativeBoundary(__instance)) return;
             try
             {
                 var observations = MorphReadiness.CurrentMeshes(__instance);
-                if (visual.Lease != null)
+                if (visual?.Lease != null)
                 {
                     var changes = visual.Lease.CheckChanges(observations);
                     if (changes.Mesh) ReleaseVisual(__instance);
                     else if (changes.Visibility) BellyVertexMorph.Invalidate(visual.CharaId);
                 }
-                if (visual.Lease == null)
+                if (visual != null && visual.Lease == null)
                 {
                     visual.Lease = new MeshLease();
                     visual.Lease.Acquire(__instance, observations);
                 }
-                BellyVertexMorph.ApplyCore(__instance, visual.CharaId, visual.Rate);
+                if (visual != null) BellyVertexMorph.ApplyCore(__instance, visual.CharaId, visual.Rate);
+                BodyChangeRuntime.ApplyAfterBelly(__instance, info);
                 BellyVertexMorph.UpdateVirtual(__instance);
                 Errors.Remove(__instance.Pointer);
             }
@@ -87,6 +96,7 @@ internal static class SVSDeformationRuntime
         catch (Exception ex)
         {
             ReleaseVisual(__instance);
+            BodyChangeRuntime.Release(__instance);
             if (Visuals.TryGetValue(__instance.Pointer, out var failed)) failed.Failed = true;
             if (!Errors.TryGetValue(__instance.Pointer, out var old) || old != ex.Message)
                 PregnancyPlugin._instance.Log.LogError("[AL morph port] Native update failed; original mesh and weights restored: " + ex);
@@ -125,6 +135,7 @@ internal static class SVSDeformationRuntime
     {
         if (human == null) return;
         ReleaseVisual(human);
+        BodyChangeRuntime.Release(human);
         Visuals.Remove(human.Pointer);
         Errors.Remove(human.Pointer);
         MorphReadiness.Forget(human);
@@ -139,6 +150,7 @@ internal static class SVSDeformationRuntime
     internal static void ReleaseAll()
     {
         foreach (var visual in Visuals.Values.ToArray()) ForgetHuman(visual.Human);
+        BodyChangeRuntime.ReleaseAll();
         BodyMeshSelection.Clear();
     }
 }

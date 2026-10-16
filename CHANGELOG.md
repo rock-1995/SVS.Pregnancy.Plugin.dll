@@ -1,3 +1,12 @@
+# 0.6.10 — 2026-10-17
+
+- Add the AL 0.2.43 belly shape/protection controls and O/P template body changes, including saved birth counts.
+- Preserve the startup hook fix and reduce character-loading and outfit-change work.
+- Blend nipple color toward P to avoid additive RGB color shifts.
+- Build and offline regression checks pass. Game testing confirms startup, improved loading/outfit responsiveness, and correct nipple color on the reported characters.
+
+---
+
 # 0.6.5 AL r4 — 2026-10-06
 
 ## 保存参数成为默认值
