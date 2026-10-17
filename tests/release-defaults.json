@@ -2,7 +2,7 @@
   "version": 5,
   "startDay": 40,
   "vtx": {
-    "growthFullness": 1.10,
+    "growthFullness": 1.1,
     "growthWidth": 1.1,
     "upperReach": 1.0762501,
     "lateSettle": 0.502008,
@@ -20,6 +20,7 @@
     "bottomGuardStrength": 0.00625,
     "bottomGuardWidth": 0.171875,
     "heightBoundaryArc": 0.8,
+    "lowerHeightBoundaryArc": 0.9845679,
     "virtualAxisStrength": 1,
     "axisBlendStart": 0.02,
     "axisBlendFull": 0.25,

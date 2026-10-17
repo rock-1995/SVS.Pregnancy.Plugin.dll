@@ -3,9 +3,9 @@ using System.Text.Json.Serialization;
 namespace SVSPregnancy
 {
     // ── Vertex-mode parameters ───────────────────────────────────────────
-    public class VtxSettings
+    public class VtxSettings : IJsonOnDeserializing
     {
-        // Defaults captured from the user on 2026-10-13 at 07:09:10 (0.2.39).
+        // Defaults captured from the exported preset on 2026-10-18 at 05:01:30 (UTC+08:00).
         // Explicit values in existing presets remain authoritative.
         [JsonPropertyName("growthFullness")] public float GrowthFullness { get; set; } = 1.10f;
         [JsonPropertyName("growthWidth")] public float GrowthWidth { get; set; } = 1.1f;
@@ -27,8 +27,18 @@ namespace SVSPregnancy
         [JsonPropertyName("thighGuardWidth")] public float ThighGuardWidth { get; set; } = 0.2484375f;
         [JsonPropertyName("bottomGuardStrength")] public float BottomGuardStrength { get; set; } = 0.00625f;
         [JsonPropertyName("bottomGuardWidth")] public float BottomGuardWidth { get; set; } = 0.171875f;
-        // Curve height boundaries around the fixed full-term belly centre; 0 keeps straight bands.
+        // Retain the old key for the upper half. A missing lower value inherits
+        // the old shared curvature, including custom/zero values in old presets.
         [JsonPropertyName("heightBoundaryArc")] public float HeightBoundaryArc { get; set; } = 0.8f;
+        private float? _lowerHeightBoundaryArc = 0.9845679f;
+        [JsonPropertyName("lowerHeightBoundaryArc")] public float LowerHeightBoundaryArc
+        {
+            get => _lowerHeightBoundaryArc ?? HeightBoundaryArc;
+            set => _lowerHeightBoundaryArc = value;
+        }
+        // Fresh/reset shapes use the bundled preset; old JSON without the lower
+        // key must still inherit its saved shared curvature, even when it is zero.
+        void IJsonOnDeserializing.OnDeserializing() => _lowerHeightBoundaryArc = null;
         // Pose equation: a virtual matrix palette entry, without hierarchy bones.
         [JsonPropertyName("virtualAxisStrength")] public float VirtualAxisStrength { get; set; } = 1f;
         [JsonPropertyName("axisBlendStart")] public float AxisBlendStart { get; set; } = 0.02f;

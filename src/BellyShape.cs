@@ -8,7 +8,7 @@ namespace SVSPregnancy;
 internal static class BellyShape
 {
     internal readonly record struct Egg(float Bottom,float Top,float HalfWidth,float Depth,float AnteriorOffset,float UpperFullness=0);
-    private readonly record struct Key(float Stage,float Fullness,float Width,float Reach,float Range,float Settle,float Smoothing,float Sag,float MidVolume,float Lift,float Clearance,bool UpperFade,float HeightArc);
+    private readonly record struct Key(float Stage,float Fullness,float Width,float Reach,float Range,float Settle,float Smoothing,float Sag,float MidVolume,float Lift,float Clearance,bool UpperFade,float HeightArc,float LowerHeightArc);
     private sealed class Cache { internal Key Key; internal Field Value; }
     private static readonly ConditionalWeakTable<TorsoProfile,Cache> Fields=new();
     internal static int FieldBuildCount { get; private set; }
@@ -57,7 +57,7 @@ internal static class BellyShape
     }
     private static Field Get(TorsoProfile t,float stage,VtxSettings p)
     {
-        var key=new Key(stage,p.GrowthFullness,p.GrowthWidth,p.UpperReach,p.VerticalRange,p.LateSettle,p.WallSmoothing,p.SagStrength,p.MidVolume,p.LowerPoleLift,p.SkinClearance,p.UpperFieldFadeEnabled,p.HeightBoundaryArc);
+        var key=new Key(stage,p.GrowthFullness,p.GrowthWidth,p.UpperReach,p.VerticalRange,p.LateSettle,p.WallSmoothing,p.SagStrength,p.MidVolume,p.LowerPoleLift,p.SkinClearance,p.UpperFieldFadeEnabled,p.HeightBoundaryArc,p.LowerHeightBoundaryArc);
         if(!Fields.TryGetValue(t,out var cache)) {cache=new Cache();Fields.Add(t,cache);}
         if(cache.Value==null || cache.Key!=key) {cache.Key=key;cache.Value=new Field(t,stage,p);FieldBuildCount++;}
         return cache.Value;
@@ -161,12 +161,12 @@ internal static class BellyShape
         private readonly float[] _push=new float[Ny*Nt],_drop=new float[Ny*Nt];
         private readonly TorsoProfile _torso;
         private readonly float _min,_max,_dy;
-        private readonly float _arcCenter, _arcAmount;
+        private readonly float _arcCenter, _arcAmount, _lowerArcAmount;
         private const float Dt=MathF.PI/(Nt-1);
         internal Field(TorsoProfile torso,float stage,VtxSettings p)
         {
             _torso=torso;float span=torso.Span,scale=span/2.7424295f;
-            _arcCenter=HeightBoundary.Center(torso,p);_arcAmount=p.HeightBoundaryArc;
+            _arcCenter=HeightBoundary.Center(torso,p);_arcAmount=p.HeightBoundaryArc;_lowerArcAmount=p.LowerHeightBoundaryArc;
             var egg=Growth(torso,stage,p);var first=Growth(torso,1f/3,p);var final=Growth(torso,1,p);
             // The smoothing domain always includes the anticipated full-term area,
             // even when the current small volume contacts only the lower abdomen.
@@ -248,7 +248,14 @@ internal static class BellyShape
                 for(int i=1;i<Ny-1;i++)
                 for(int j=1;j<Nt-1;j++)
                 {
-                    float u=MathF.Min(Ny-1,i+shift/HeightBoundary.Scale(-MathF.PI*.5f+j*Dt,_arcAmount));int lo=Math.Min(Ny-2,(int)u);float f=u-lo;
+                    float angle=-MathF.PI*.5f+j*Dt;
+                    // Retain the old arithmetic when both halves match. With
+                    // separate arcs, an advection step may cross the center.
+                    float row = _arcAmount == _lowerArcAmount
+                        ? i+shift/HeightBoundary.Scale(angle,_arcAmount)
+                        : (HeightBoundary.Coordinate(GridHeight(i,angle)+shift*_dy,angle,
+                            _arcCenter,_arcAmount,_lowerArcAmount)-_min)/_dy;
+                    float u=MathF.Min(Ny-1,row);int lo=Math.Min(Ny-2,(int)u);float f=u-lo;
                     float spread=.85f*((1-f)*basePush[lo*Nt+j]+f*basePush[(lo+1)*Nt+j]);
                     float extra=MathF.Max(0,spread-basePush[i*Nt+j]);
                     _push[i*Nt+j]+=extra*Smooth(extra/(.035f*span))*Smooth(i*_dy/(.16f*span));
@@ -257,9 +264,13 @@ internal static class BellyShape
             // Bound the vertical gradient so sag cannot reverse the row ordering.
             for(int j=0;j<Nt;j++)
             {
-                float physicalStep=_dy*HeightBoundary.Scale(-MathF.PI*.5f+j*Dt,_arcAmount);
-                for(int i=1;i<Ny;i++)_drop[i*Nt+j]=MathF.Min(_drop[i*Nt+j],_drop[(i-1)*Nt+j]+.60f*physicalStep);
-                for(int i=Ny-2;i>=0;i--)_drop[i*Nt+j]=MathF.Min(_drop[i*Nt+j],_drop[(i+1)*Nt+j]+.60f*physicalStep);
+                float angle=-MathF.PI*.5f+j*Dt;
+                float sharedStep=_dy*HeightBoundary.Scale(angle,_arcAmount);
+                float Step(int lowerRow) => _arcAmount == _lowerArcAmount
+                    ? sharedStep
+                    : GridHeight(lowerRow+1,angle)-GridHeight(lowerRow,angle);
+                for(int i=1;i<Ny;i++)_drop[i*Nt+j]=MathF.Min(_drop[i*Nt+j],_drop[(i-1)*Nt+j]+.60f*Step(i-1));
+                for(int i=Ny-2;i>=0;i--)_drop[i*Nt+j]=MathF.Min(_drop[i*Nt+j],_drop[(i+1)*Nt+j]+.60f*Step(i));
             }
             // Bound the magnitude first so both directions retain the same zero
             // boundary. Applying Min directly to a negative slide propagated a
@@ -273,6 +284,8 @@ internal static class BellyShape
             float d=MathF.Max(.01f*_torso.Span,(_torso.FrontAt(y)-_torso.BackAt(y))*.5f);
             return 1/MathF.Sqrt(sn*sn/(w*w)+cs*cs/(d*d));
         }
+        private float GridHeight(int row,float angle)
+            => HeightBoundary.Height(_min+row*_dy,angle,_arcCenter,_arcAmount,_lowerArcAmount);
         internal void Sample(Vector3 v,out float push,out float drop,out float angle)
         {
             angle=MathF.Atan2(v.X,v.Z-_torso.AxisAt(v.Y));
@@ -281,7 +294,7 @@ internal static class BellyShape
         internal void SampleAtHeight(float y,float angle,out float push,out float drop)
         {
             push=drop=0;
-            y=HeightBoundary.Coordinate(y,angle,_arcCenter,_arcAmount);
+            y=HeightBoundary.Coordinate(y,angle,_arcCenter,_arcAmount,_lowerArcAmount);
             if(y<=_min || y>=_max || MathF.Abs(angle)>=MathF.PI*.5f)return;
             float yy=(y-_min)/_dy,tt=(angle+MathF.PI*.5f)/Dt;
             int i=Math.Min(Ny-2,(int)yy),j=Math.Min(Nt-2,(int)tt);float fy=yy-i,ft=tt-j;

@@ -8,6 +8,7 @@ void Check(string name, bool value)
 }
 ReleaseDefaultsRegression.Run(Check);
 ProtectionRegression.Run(Check);
+LowerBoundaryArcRegression.Run(Check);
 LowerTransitionRegression.Run(Check);
 UpperTransitionRegression.Run(Check);
 UpperRestrictionsRegression.Run(Check);

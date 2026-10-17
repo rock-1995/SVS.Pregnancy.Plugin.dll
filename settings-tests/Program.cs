@@ -31,6 +31,18 @@ try
     Check("Explicitly saved new sag zero stays off",BellyDeformSettings.Vtx.BellySag==0&&BellyDeformSettings.Vtx.SagStrength==1.31f);
     BellyDeformSettings.ResetToDefaults();
     Check("Reset preserves r4 legacy default and initializes new sag",BellyDeformSettings.Vtx.SagStrength==1.0625f&&BellyDeformSettings.Vtx.BellySag==2.5f);
+    File.WriteAllText(path,"""{"version":5,"startDay":57,"vtx":{"heightBoundaryArc":0.23}}""");
+    BellyDeformSettings.Load();p=BellyDeformSettings.Vtx;
+    Check("Old saved shared curvature is inherited by both halves",p.HeightBoundaryArc==.23f&&p.LowerHeightBoundaryArc==.23f);
+    p.LowerHeightBoundaryArc=0;p.HeightBoundaryArc=.9f;
+    BellyDeformSettings.Save(57,p);BellyDeformSettings.ResetToDefaults();BellyDeformSettings.Load();
+    Check("Independent upper and lower curvature survives the production settings store",BellyDeformSettings.Vtx.HeightBoundaryArc==.9f&&BellyDeformSettings.Vtx.LowerHeightBoundaryArc==0&&BellyDeformSettings.StartDay==57);
+    BellyDeformSettings.Vtx.HeightBoundaryArc=.4f;
+    Check("Explicitly saved lower zero remains independent of later upper edits",BellyDeformSettings.Vtx.LowerHeightBoundaryArc==0);
+    BellyDeformSettings.ResetToDefaults();
+    Check("Default shape restores the exported upper/lower curvatures",BellyDeformSettings.Vtx.HeightBoundaryArc==.8f&&BellyDeformSettings.Vtx.LowerHeightBoundaryArc==.9845679f);
+    BellyDeformSettings.Save(40,BellyDeformSettings.Vtx);BellyDeformSettings.ResetToDefaults();BellyDeformSettings.Load();
+    Check("Exported default curvatures survive saving and reloading",BellyDeformSettings.Vtx.HeightBoundaryArc==.8f&&BellyDeformSettings.Vtx.LowerHeightBoundaryArc==.9845679f);
     Console.WriteLine($"{checks} settings integration checks passed (production store, isolated temporary config).");
 }
 finally {File.Delete(path);Directory.Delete(dir);}

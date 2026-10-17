@@ -192,13 +192,19 @@ internal static class HeightBoundary
         float scale = Scale(angle, amount);
         return scale == 1 ? y : center + (y - center) / scale;
     }
+    internal static float Coordinate(float y, float angle, float center, float upperArc, float lowerArc)
+        => Coordinate(y, angle, center, y < center ? lowerArc : upperArc);
     internal static float Coordinate(Vector3 original, TorsoProfile torso, VtxSettings p)
-        => Coordinate(original.Y, MathF.Atan2(original.X, original.Z - torso.AxisAt(original.Y)), Center(torso, p), p.HeightBoundaryArc);
+        => Coordinate(original.Y, MathF.Atan2(original.X, original.Z - torso.AxisAt(original.Y)),
+            Center(torso, p), p.HeightBoundaryArc, p.LowerHeightBoundaryArc);
     internal static float Height(float level, float angle, TorsoProfile torso, VtxSettings p)
+        => Height(level, angle, Center(torso, p), p.HeightBoundaryArc, p.LowerHeightBoundaryArc);
+    internal static float Height(float level, float angle, float center, float upperArc, float lowerArc)
     {
-        float scale = Scale(angle, p.HeightBoundaryArc);
+        // Positive scales keep each half on its own side of the fixed center,
+        // so the inverse selects the same arc and the two halves meet exactly.
+        float scale = Scale(angle, level < center ? lowerArc : upperArc);
         if (scale == 1) return level;
-        float center = Center(torso, p);
         return center + (level - center) * scale;
     }
 }

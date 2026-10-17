@@ -19,7 +19,7 @@ The plugin includes its own body and clothing deformation system. No separate ch
 
 Requires a working **BepInEx IL2CPP** installation for SVS. BepInEx Configuration Manager is optional and provides the F1 settings window when installed with its usual key binding.
 
-1. Close the game and download `SVS_Pregnancy_0.6.11.zip` from the release page.
+1. Close the game and download `SVS_Pregnancy_0.6.13.zip` from the release page.
 2. Extract its `BepInEx` folder into the `SamabakeScramble` game folder.
 3. Check that the DLL and template folder are arranged as follows:
 
@@ -59,6 +59,8 @@ Use Configuration Manager or edit `BepInEx/config/SVS.SVSPregnancy.cfg` while th
 Open **F8**, select a character, and use **Enable Preview** to inspect belly growth. **Growth stage** controls the preview; **Full-term shape** loads the bundled shape and previews full growth. Previewing the belly does not change pregnancy or birth count, and temporarily suspends template body changes for the previewed character. Turn preview off to return to normal progression.
 
 Adjust fullness, width, sag, clothing displacement, navel response, and attachment/protection controls as needed. Numeric fields also accept values beyond the slider's displayed range. Use **Rebuild shape** to refresh the current deformation, **Default shape** to restore the bundled shape settings, and **Save to File** to keep your adjustments.
+
+**Lower boundary arc** and **Upper boundary arc** control the two boundary curvatures independently in their respective attachment/release sections. **0** makes that boundary straight; increasing the value strengthens its curve. Older presets without a separate lower value retain their previous shared curvature on both halves. Use **Save to File** to store the two values separately.
 
 Belly settings are stored in `BepInEx/config/SVSPregnancy_belly.json`. **Pregnancy belly start day** controls when the growing belly begins to appear; its default is day **40**.
 

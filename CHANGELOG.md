@@ -1,3 +1,15 @@
+# 0.6.13 — 2026-10-18
+
+- Update the bundled belly preset from the latest export: lower boundary curvature **0.9845679**, upper curvature **0.8**. Existing saved settings remain in use.
+
+---
+
+# 0.6.12 — 2026-10-17
+
+- Add independent upper/lower boundary curvature controls in F8, shared by belly deformation, body protection, and skin/clothing attachment. Old presets retain their shared curvature until edited.
+
+---
+
 # 0.6.11 — 2026-10-17
 
 - Set the default nipple-color progress cap to **0.45070422** (about **45.07%**). Existing saved configuration values remain in use.

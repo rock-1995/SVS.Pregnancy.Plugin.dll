@@ -63,7 +63,7 @@ internal static class SagRegression
         foreach(float legacy in new[]{0f,.95983934f,2f})
         foreach(float stage in new[]{0f,1f/3,4f/9,.7f,1f})
         {
-            var p=new VtxSettings {SagStrength=legacy,BellySag=0,HeightBoundaryArc=0};
+            var p=new VtxSettings {SagStrength=legacy,BellySag=0,HeightBoundaryArc=0,LowerHeightBoundaryArc=0};
             var before=original.Select(v=>PreSagBellyShape.Deform(v,t,stage,p)).ToArray();
             var current=original.Select(v=>BellyShape.Deform(v,t,stage,p)).ToArray();
             check($"{label}: bellySag zero exactly preserves 0.2.30 at legacy={legacy}, stage={stage}",before.SequenceEqual(current));

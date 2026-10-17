@@ -59,8 +59,8 @@ namespace SVSPregnancy
         public const string PluginName = "SVSPregnancy";
 
         public const string Transplanter = "Zentaiman";
-        public const string PluginVersion = "0.6.11";
-        public const string BuildMarker = "20261017-SVS-nipple-color-default";
+        public const string PluginVersion = "0.6.13";
+        public const string BuildMarker = "20261018-SVS-exported-belly-preset";
         public static PregnancyWorldController _worldController;
 
         public static PregnancyAssetController _assetController;                    
