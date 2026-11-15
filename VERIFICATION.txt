@@ -1,0 +1,6 @@
+SVS Pregnancy 0.6.14 - release verification, 2026-11-16
+
+Production rebuild: 0 errors, 470 compiler warnings. Body/animation/clothing-correction regression: 173 checks passed.
+The published DLL is byte-identical to the installed 0.6.14 build from 2026-10-18; production source matches that build's archived source.
+DLL SHA-256: A04095DCA14803CFBB47C496B05D6C961ECCD069514CD1D8A08908FBF05A79AB
+The original 2026-10-18 full Test.ps1 run passed, including 72 native-hook metadata checks. This publication reran the build and focused body-change suite. No game was launched or visual scene tested for this publication.

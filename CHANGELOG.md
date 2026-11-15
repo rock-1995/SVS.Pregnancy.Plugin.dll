@@ -1,3 +1,10 @@
+# 0.6.14 — 2026-10-18
+
+- Apply template body-slider changes to enabled clothing shape corrections, using each garment's original correction values and the existing progression and slider limits.
+- Supply the same corrected values to native animation reads. Preserve garment selection and restore saved body/clothing data after each update, including exceptions and reloads.
+
+---
+
 # 0.6.13 — 2026-10-18
 
 - Update the bundled belly preset from the latest export: lower boundary curvature **0.9845679**, upper curvature **0.8**. Existing saved settings remain in use.
@@ -87,3 +94,4 @@ Build marker: `20261006-AL-0.2.26-SVS-upper-attachment-r3`.
 关闭游戏并备份旧 DLL，将 Release 附件 `SVS_Pregnancy.dll` 替换到
 `BepInEx/plugins/SVS_plugins/SVS_Pregnancy.dll`。配置可以沿用。
 不要同时放入两份可被加载的插件 DLL。
+

@@ -10,7 +10,7 @@ A BepInEx IL2CPP plugin for **Summer Vacation Scramble** that adds pregnancy pro
 - **Pregnancy and birth:** a configurable progression speed, birth timing around term, premature birth and miscarriage outcomes, postpartum cooldown, and effects on character emotions and relationships.
 - **Belly deformation:** progressive growth with adjustable fullness, width, downward sag, navel response, and pose response. Attachment and protection controls help preserve the chest, thighs, and lower-body shape.
 - **Clothing deformation:** clothes follow the changing body, including layered clothing and skirt support, with adjustable displacement to help manage clipping.
-- **Template body changes:** the game's body sliders and breast controls change gradually using two reference cards. Birth count preserves accumulated body changes after pregnancy; nipple color has a separate progress limit.
+- **Template body changes:** the game's body sliders, enabled clothing shape corrections and breast controls change gradually using two reference cards. Birth count preserves accumulated body changes after pregnancy; nipple color has a separate progress limit.
 - **Saved state and in-game controls:** pregnancy data and birth counts are stored alongside game saves. The F8 panel provides character inspection, belly preview, shape tuning, and birth-count correction.
 
 The plugin includes its own body and clothing deformation system. No separate character-body deformation plugin is required.
@@ -19,7 +19,7 @@ The plugin includes its own body and clothing deformation system. No separate ch
 
 Requires a working **BepInEx IL2CPP** installation for SVS. BepInEx Configuration Manager is optional and provides the F1 settings window when installed with its usual key binding.
 
-1. Close the game and download `SVS_Pregnancy_0.6.13.zip` from the release page.
+1. Close the game and download `SVS_Pregnancy_0.6.14.zip` from the release page.
 2. Extract its `BepInEx` folder into the `SamabakeScramble` game folder.
 3. Check that the DLL and template folder are arranged as follows:
 
@@ -114,3 +114,4 @@ They cover deformation geometry, clothing, runtime restoration, body changes, pe
 Thanks to the authors of **Pregnancy Plus** for the original work and ideas this project builds on, and to the author of the ["monkey version" pregnancy plugin](https://zodgame.xyz/forum.php?mod=viewthread&tid=471375&extra=) for the starting point.
 
 The belly and template body-change design draws on AL Pregnancy, with integration adapted for SVS.
+

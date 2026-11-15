@@ -1,4 +1,4 @@
-﻿using System.Text.Json;
+using System.Text.Json;
 using SVSPregnancy;
 
 namespace UnityEngine
@@ -78,7 +78,7 @@ namespace Character
     }
     public sealed class Human : NativeObject
     {
-        public HumanData data=new();public HumanBody body;public bool disposed,isReloading,hiPoly=true;public int sex=1;
+        public HumanCloth cloth=new();public HumanData data=new();public HumanBody body;public bool disposed,isReloading,hiPoly=true;public int sex=1;
         public GameObject gameObject=new();
         public Human() { body=new(this); }
         public void Load() {} public void Reload() {} public void ReloadCoordinate() {} public void ReloadHead() {} public void ReloadHair() {} public void ReloadSkin() {} public void ReloadMannequin() {}
@@ -93,7 +93,7 @@ namespace Character
         public HumanBody(Human human) { Human=human; }
         public void SetUpdateShapeBodyValue() { _updateShapeBodyValue=true; }
         public void SetUpdateShapeBody() { _updateShapeBody=true; }
-        public void UpdateShapeBodyValue() { Applied=BodyChangeValues.Read(Human.data.Custom.Body);ValueUpdates++;_updateShapeBodyValue=false; }
+        public void UpdateShapeBodyValue() { Applied=BodyChangeValues.Read(Human.data.Custom.Body);Human.cloth.Apply(Human,Applied);ValueUpdates++;_updateShapeBodyValue=false; }
         public void UpdateShapeBody() { ShapeUpdates++; BodyChangeRuntime.NativeShapeUpdated(this); }
         public void LateUpdate()
         {
@@ -143,3 +143,4 @@ namespace SVSPregnancy {
  public class PregnancyCharaController { public class PregnancyInfo {public bool IsPregnant;public double Progress;public int _births;} }
 
 }
+

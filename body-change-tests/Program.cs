@@ -1,4 +1,4 @@
-﻿using SVSPregnancy;
+using SVSPregnancy;
 using Character;
 using UnityEngine;
 
@@ -130,6 +130,7 @@ Check("Manual preview restores original body",human.body.Applied.Same(BodyChange
 SVSBodyChangeConfig.Preview=false;Tick();
 
 AnimationContactRegression.Run(Check);
+CoverRegression.Run(Check);
 BodyChangeRuntime.ReleaseAll();human.body.ThrowExtra=true;
 try {BodyChangeRuntime.BeginAfterBelly(human,pregnancy);throw new Exception("expected failure");}catch(InvalidOperationException){}
 Check("native preparation failure cannot leak temporary data",ReferenceEquals(human.data.Custom.Body,originalBody));
@@ -142,3 +143,4 @@ BodyChangeRuntime.ReleaseAll();
 Tick();File.Delete(Path.Combine(AppContext.BaseDirectory,"SVSPregnancyTemplates","p.png"));Time.unscaledTime=3;
 Tick();Check("missing replacement card restores original instead of stale changes",human.body.Applied.Same(BodyChangeValues.Read(originalBody)));
 Console.WriteLine($"Body change regression: {passed} checks passed.");
+
